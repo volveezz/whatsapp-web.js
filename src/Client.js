@@ -2238,47 +2238,74 @@ class Client extends EventEmitter {
      * @returns {Promise<void>}
      */
     async reinitializeCryptoStore() {
-        await this.pupPage.evaluate(() => {
-            // Force reinitialization of crypto modules
-            if (window.Store.CryptoLib) {
-                // Reinitialize the crypto state
-                window.Store.CryptoLib.initializeWebCrypto();
+        await this.pupPage.evaluate(async () => {
+            // Wait for CryptoLib to load
+            function waitForCryptoLib(maxRetries = 30, interval = 500) {
+                return new Promise((resolve, reject) => {
+                    let retries = 0;
+                    const check = () => {
+                        if (window.Store?.CryptoLib) return resolve();
+                        if (retries++ >= maxRetries)
+                            return reject("CryptoLib not found");
+                        setTimeout(check, interval);
+                    };
+                    check();
+                });
             }
 
-            // Ensure the message handling pipeline is properly connected to crypto
-            const originalAddHandler = window.Store.Msg.on;
-            window.Store.Msg.on = function (event, handler) {
-                if (event === "add") {
-                    return originalAddHandler.call(this, event, async (msg) => {
-                        if (msg.isNewMsg) {
-                            if (msg.type === "ciphertext") {
-                                try {
-                                    // Force immediate decryption attempt
-                                    await window.Store.CryptoLib.decryptE2EMessage(
-                                        msg
-                                    );
-                                    msg.once("change:type", (_msg) =>
-                                        window.onAddMessageEvent(
-                                            window.WWebJS.getMessageModel(_msg)
-                                        )
-                                    );
-                                    window.onAddMessageCiphertextEvent(
-                                        window.WWebJS.getMessageModel(msg)
-                                    );
-                                } catch (err) {
-                                    console.error(
-                                        "Failed to decrypt message:",
-                                        err
-                                    );
+            try {
+                await waitForCryptoLib();
+
+                // Reinitialize the crypto state
+                window.Store.CryptoLib.initializeWebCrypto();
+
+                // Patch message handler to decrypt immediately
+                const originalAddHandler = window.Store.Msg.on;
+                window.Store.Msg.on = function (event, handler) {
+                    if (event === "add") {
+                        return originalAddHandler.call(
+                            this,
+                            event,
+                            async (msg) => {
+                                if (msg.isNewMsg) {
+                                    if (msg.type === "ciphertext") {
+                                        try {
+                                            await window.Store.CryptoLib.decryptE2EMessage(
+                                                msg
+                                            );
+                                            msg.once("change:type", (_msg) =>
+                                                window.onAddMessageEvent(
+                                                    window.WWebJS.getMessageModel(
+                                                        _msg
+                                                    )
+                                                )
+                                            );
+                                            window.onAddMessageCiphertextEvent(
+                                                window.WWebJS.getMessageModel(
+                                                    msg
+                                                )
+                                            );
+                                        } catch (err) {
+                                            console.error(
+                                                "Failed to decrypt message:",
+                                                err
+                                            );
+                                        }
+                                    } else {
+                                        handler(msg);
+                                    }
                                 }
-                            } else {
-                                handler(msg);
                             }
-                        }
-                    });
-                }
-                return originalAddHandler.call(this, event, handler);
-            };
+                        );
+                    }
+                    return originalAddHandler.call(this, event, handler);
+                };
+            } catch (err) {
+                console.error(
+                    "[reinitializeCryptoStore] Failed to initialize CryptoLib:",
+                    err
+                );
+            }
         });
     }
 }
