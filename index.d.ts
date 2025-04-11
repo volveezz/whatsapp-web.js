@@ -1602,6 +1602,8 @@ declare namespace WAWebJS {
             content: MessageContent,
             options?: MessageSendOptions
         ) => Promise<Message>;
+        /** Send a reaction to a message */
+        sendReaction: (reaction: string, messageId: string) => Promise<void>;
         /** Set the message as seen */
         sendSeen: () => Promise<void>;
         /** Simulate recording audio in chat. This will last for 25 seconds */

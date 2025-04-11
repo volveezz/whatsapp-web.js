@@ -1268,16 +1268,19 @@ class Client extends EventEmitter {
                 const chatWid = window.Store.WidFactory.createWid(chatId);
                 const chat = await window.Store.Chat.find(chatWid);
 
-                if (sendSeen) {
-                    await window.WWebJS.sendSeen(chatId);
-                }
+                const seenPromise = sendSeen
+                    ? window.WWebJS.sendSeen(chatId)
+                    : Promise.resolve();
 
-                const msg = await window.WWebJS.sendMessage(
+                const msgPromise = window.WWebJS.sendMessage(
                     chat,
                     message,
                     options,
                     sendSeen
                 );
+
+                const [, msg] = await Promise.all([seenPromise, msgPromise]);
+
                 return window.WWebJS.getMessageModel(msg);
             },
             chatId,
@@ -1287,6 +1290,29 @@ class Client extends EventEmitter {
         );
 
         return new Message(this, newMessage);
+    }
+
+    /**
+     * React to a message with an emoji
+     * @param {string} reaction - Emoji to react with. Send an empty string to remove the reaction.
+     * @param {string} messageId - The ID of the message to react to.
+     * @return {Promise}
+     */
+    async sendReaction(reaction, messageId) {
+        await this.pupPage.evaluate(
+            async (messageId, reaction) => {
+                const msg =
+                    window.Store.Msg.get(messageId) ||
+                    (await window.Store.Msg.getMessagesById([messageId]))
+                        ?.messages?.[0];
+
+                if (msg) {
+                    await window.Store.sendReactionToMsg(msg, reaction);
+                }
+            },
+            messageId,
+            reaction
+        );
     }
 
     /**
