@@ -40,6 +40,7 @@ const {
 } = require("./structures");
 const NoAuth = require("./authStrategies/NoAuth");
 const { exposeFunctionIfAbsent } = require("./util/Puppeteer");
+const treeKill = require("tree-kill");
 
 /**
  * Starting point for interacting with the WhatsApp Web API
@@ -1086,8 +1087,15 @@ class Client extends EventEmitter {
      * Closes the client
      */
     async destroy() {
+        const browserPid = this.pupBrowser.process().pid;
         await this.pupBrowser.close();
         await this.authStrategy.destroy();
+
+        if (browserPid) {
+            treeKill(browserPid, (error) => {
+                console.error("Failed to kill browser process", error);
+            });
+        }
     }
 
     /**
@@ -1106,7 +1114,7 @@ class Client extends EventEmitter {
         await this.pupBrowser.close();
 
         let maxDelay = 0;
-        while (this.pupBrowser.isConnected() && maxDelay < 10) {
+        while (this.pupBrowser.connected && maxDelay < 10) {
             // waits a maximum of 1 second before calling the AuthStrategy
             await new Promise((resolve) => setTimeout(resolve, 100));
             maxDelay++;
@@ -1630,15 +1638,9 @@ class Client extends EventEmitter {
         const profilePic = await this.pupPage.evaluate(async (contactId) => {
             try {
                 const chatWid = window.Store.WidFactory.createWid(contactId);
-                return window.compareWwebVersions(
-                    window.Debug.VERSION,
-                    "<",
-                    "2.3000.0"
-                )
-                    ? await window.Store.ProfilePic.profilePicFind(chatWid)
-                    : await window.Store.ProfilePic.requestProfilePicFromServer(
-                          chatWid
-                      );
+                return await window.Store.ProfilePic.requestProfilePicFromServer(
+                    chatWid
+                );
             } catch (err) {
                 if (err.name === "ServerStatusCodeError") return undefined;
                 throw err;
