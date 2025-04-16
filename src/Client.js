@@ -1093,11 +1093,7 @@ class Client extends EventEmitter {
         await this.pupBrowser.close();
         await this.authStrategy.destroy();
 
-        if (browserPid) {
-            treeKill(browserPid, (error) => {
-                console.error("Failed to kill browser process", error);
-            });
-        }
+        if (browserPid) treeKill(browserPid);
     }
 
     /**
