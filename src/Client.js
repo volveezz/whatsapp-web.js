@@ -454,7 +454,8 @@ class Client extends EventEmitter {
                 this.lastLoggedOut = false;
                 return;
             }
-            await this.inject();
+            console.debug("Should inject now");
+            // await this.inject();
         });
     }
 
@@ -1093,11 +1094,7 @@ class Client extends EventEmitter {
         await this.pupBrowser.close();
         await this.authStrategy.destroy();
 
-        if (browserPid) {
-            treeKill(browserPid, (error) => {
-                console.error("Failed to kill browser process", error);
-            });
-        }
+        if (browserPid) treeKill(browserPid);
     }
 
     /**
