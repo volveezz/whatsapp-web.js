@@ -454,8 +454,7 @@ class Client extends EventEmitter {
                 this.lastLoggedOut = false;
                 return;
             }
-            console.debug("Should inject now");
-            // await this.inject();
+            await this.inject();
         });
     }
 
