@@ -1269,31 +1269,47 @@ class Client extends EventEmitter {
             );
         }
 
-        const newMessage = await this.pupPage.evaluate(
+        const { message: newMessage, error } = await this.pupPage.evaluate(
             async (chatId, message, options, sendSeen) => {
                 const chatWid = window.Store.WidFactory.createWid(chatId);
                 const chat = await window.Store.Chat.find(chatWid);
+                if (sendSeen) {
+                    void window.WWebJS.sendSeen(chatId).catch(() => {});
+                }
 
-                const seenPromise = sendSeen
-                    ? window.WWebJS.sendSeen(chatId)
-                    : Promise.resolve();
+                let result = null;
+                let errInfo = null;
+                try {
+                    const msg = await window.WWebJS.sendMessage(
+                        chat,
+                        message,
+                        options,
+                        sendSeen
+                    );
+                    result = window.WWebJS.getMessageModel(msg);
+                } catch (e) {
+                    errInfo = {
+                        name: e.name,
+                        message: e.message,
+                        stack: e.stack,
+                        code: e.code,
+                        media: options.media,
+                        chatId: chatWid,
+                    };
+                }
 
-                const msgPromise = window.WWebJS.sendMessage(
-                    chat,
-                    message,
-                    options,
-                    sendSeen
-                );
-
-                const [, msg] = await Promise.all([seenPromise, msgPromise]);
-
-                return window.WWebJS.getMessageModel(msg);
+                return { message: result, error: errInfo };
             },
             chatId,
             content,
             internalOptions,
             sendSeen
         );
+
+        if (error) {
+            console.error("Error sending message:", error);
+            throw new Error(error.message);
+        }
 
         return new Message(this, newMessage);
     }
