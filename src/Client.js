@@ -43,6 +43,21 @@ const { exposeFunctionIfAbsent } = require("./util/Puppeteer");
 const treeKill = require("tree-kill");
 
 /**
+ * SendMessageError represents an error that occurred during message sending
+ */
+class SendMessageError extends Error {
+    constructor({ name, message, stack, code, media, chatId }) {
+        super(`[${name}] ${message}`);
+        this.name = "SendMessageError";
+        this.original = name;
+        this.code = code;
+        this.media = media;
+        this.chatId = chatId;
+        this.stack = stack;
+    }
+}
+
+/**
  * Starting point for interacting with the WhatsApp Web API
  * @extends {EventEmitter}
  * @param {object} options - Client options
@@ -1182,27 +1197,6 @@ class Client extends EventEmitter {
      * @returns {Promise<Message>} Message that was just sent
      */
     async sendMessage(chatId, content, options = {}) {
-        if (options.mentions) {
-            !Array.isArray(options.mentions) &&
-                (options.mentions = [options.mentions]);
-            if (
-                options.mentions.some(
-                    (possiblyContact) => possiblyContact instanceof Contact
-                )
-            ) {
-                console.warn(
-                    "Mentions with an array of Contact are now deprecated. See more at https://github.com/pedroslopez/whatsapp-web.js/pull/2166."
-                );
-                options.mentions = options.mentions.map(
-                    (a) => a.id._serialized
-                );
-            }
-        }
-
-        options.groupMentions &&
-            !Array.isArray(options.groupMentions) &&
-            (options.groupMentions = [options.groupMentions]);
-
         let internalOptions = {
             linkPreview: options.linkPreview === false ? undefined : true,
             sendAudioAsVoice: options.sendAudioAsVoice,
@@ -1211,12 +1205,28 @@ class Client extends EventEmitter {
             sendMediaAsDocument: options.sendMediaAsDocument,
             caption: options.caption,
             quotedMessageId: options.quotedMessageId,
-            parseVCards: options.parseVCards !== false,
-            mentionedJidList: options.mentions || [],
-            groupMentions: options.groupMentions,
-            invokedBotWid: options.invokedBotWid,
+            parseVCards: options.parseVCards === false ? false : true,
+            mentionedJidList: Array.isArray(options.mentions)
+                ? options.mentions.map((contact) =>
+                      contact?.id ? contact.id._serialized : contact
+                  )
+                : [],
             extraOptions: options.extra,
         };
+
+        if (options.gifPlayback !== undefined) {
+            internalOptions.sendVideoAsGif = options.gifPlayback;
+            console.warn(
+                'WARNING: The "gifPlayback" option is deprecated. Please use "sendVideoAsGif" instead.'
+            );
+        }
+
+        if (options.mentions?.some((m) => m.id)) {
+            console.warn(
+                "Mentions with an array of Contact are now deprecated. See more at https://github.com/pedroslopez/whatsapp-web.js/pull/2166."
+            );
+            options.mentions = options.mentions.map((a) => a.id._serialized);
+        }
 
         const sendSeen =
             typeof options.sendSeen === "undefined" ? true : options.sendSeen;
@@ -1273,12 +1283,13 @@ class Client extends EventEmitter {
             async (chatId, message, options, sendSeen) => {
                 const chatWid = window.Store.WidFactory.createWid(chatId);
                 const chat = await window.Store.Chat.find(chatWid);
-                if (sendSeen) {
-                    void window.WWebJS.sendSeen(chatId).catch(() => {});
+
+                if (!chat) {
+                    throw new Error("Chat not found");
                 }
 
-                let result = null;
                 let errInfo = null;
+                let result = null;
                 try {
                     const msg = await window.WWebJS.sendMessage(
                         chat,
@@ -1307,8 +1318,12 @@ class Client extends EventEmitter {
         );
 
         if (error) {
-            console.error("Error sending message:", error);
-            throw new Error(error.message);
+            console.error(
+                `Failed to send message to ${error.chatId}:`,
+                error.message,
+                `(code=${error.code})`
+            );
+            throw new SendMessageError(error);
         }
 
         return new Message(this, newMessage);
@@ -2352,4 +2367,4 @@ class Client extends EventEmitter {
     }
 }
 
-module.exports = Client;
+module.exports = { Client, SendMessageError };
