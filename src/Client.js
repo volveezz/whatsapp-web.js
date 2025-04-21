@@ -1104,9 +1104,9 @@ class Client extends EventEmitter {
      * Closes the client
      */
     async destroy() {
-        const browserPid = this.pupBrowser.process().pid;
-        await this.pupBrowser.close();
-        await this.authStrategy.destroy();
+        const browserPid = this.pupBrowser?.process().pid;
+        await this.pupBrowser?.close();
+        await this.authStrategy?.destroy();
 
         if (browserPid) treeKill(browserPid);
     }
