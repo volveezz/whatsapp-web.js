@@ -867,6 +867,67 @@ class Message extends Base {
         }
         return null;
     }
+
+    /**
+     * Returns link preview data from a message
+     * @returns {Object|null} Link preview data or null if no link preview
+     */
+    getLinkPreview() {
+        if (!this._data.previewType || !this._data.isLink) {
+            return null;
+        }
+
+        const linkPreview = {
+            type: this._data.previewType,
+            source: this._data.previewSrc || this._data.body,
+        };
+
+        // Add thumbnail URL if available
+        if (this._data.previewThumbnailUrl) {
+            linkPreview.thumbnailUrl = this._data.previewThumbnailUrl;
+        }
+
+        // Add additional metadata if available
+        if (this._data.matchedText)
+            linkPreview.matchedText = this._data.matchedText;
+        if (this._data.canonicalUrl)
+            linkPreview.canonicalUrl = this._data.canonicalUrl;
+        if (this._data.description)
+            linkPreview.description = this._data.description;
+        if (this._data.title) linkPreview.title = this._data.title;
+
+        return linkPreview;
+    }
+
+    /**
+     * Downloads and returns the link preview thumbnail as a MessageMedia object if available
+     * @returns {Promise<MessageMedia|null>} The thumbnail as a MessageMedia object or null if not available
+     */
+    async downloadLinkPreviewThumbnail() {
+        const linkPreview = this.getLinkPreview();
+        if (!linkPreview || !linkPreview.thumbnailUrl) {
+            return null;
+        }
+
+        const thumbnail = await this.client.pupPage.evaluate(
+            async (thumbnailUrl) => {
+                return await window.WWebJS.downloadLinkPreviewThumbnail(
+                    thumbnailUrl
+                );
+            },
+            linkPreview.thumbnailUrl
+        );
+
+        if (!thumbnail) {
+            return null;
+        }
+
+        return new MessageMedia(
+            thumbnail.mimetype,
+            thumbnail.data,
+            thumbnail.filename
+        );
+    }
 }
 
 module.exports = Message;
