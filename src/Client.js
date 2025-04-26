@@ -131,6 +131,8 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
+        if (this._bindingsExposed) return;
+
         await this.pupPage.waitForFunction(
             "window.Debug?.VERSION != undefined",
             { timeout: this.options.authTimeoutMs }
@@ -139,32 +141,21 @@ class Client extends EventEmitter {
         const version = await this.getWWebVersion();
         const isCometOrAbove = parseInt(version.split(".")?.[1]) >= 3000;
 
-        if (isCometOrAbove) {
-            await this.pupPage.evaluate(ExposeAuthStore);
-        } else {
-            await this.pupPage.evaluate(
-                ExposeLegacyAuthStore,
-                moduleRaid.toString()
-            );
-        }
+        await this.pupPage.evaluate(ExposeAuthStore);
 
         const needAuthentication = await this.pupPage.evaluate(async () => {
             let state = window.AuthStore.AppState.state;
 
-            if (
-                state === "OPENING" ||
-                state === "UNLAUNCHED" ||
-                state === "PAIRING"
-            ) {
+            if (["OPENING", "UNLAUNCHED", "PAIRING"].includes(state)) {
                 // wait till state changes
                 await new Promise((r) => {
                     window.AuthStore.AppState.on(
                         "change:state",
                         function waitTillInit(_AppState, state) {
                             if (
-                                state !== "OPENING" &&
-                                state !== "UNLAUNCHED" &&
-                                state !== "PAIRING"
+                                !["OPENING", "UNLAUNCHED", "PAIRING"].includes(
+                                    state
+                                )
                             ) {
                                 window.AuthStore.AppState.off(
                                     "change:state",
@@ -352,7 +343,7 @@ class Client extends EventEmitter {
             async (percent) => {
                 if (lastPercent !== percent) {
                     lastPercent = percent;
-                    this.emit(Events.LOADING_SCREEN, percent, "WhatsApp"); // Message is hardcoded as "WhatsApp" for now
+                    this.emit(Events.LOADING_SCREEN, percent);
                 }
             }
         );
@@ -367,6 +358,9 @@ class Client extends EventEmitter {
             }
         );
         await this.pupPage.evaluate(() => {
+            if (window.__WWEBJS_CORE_LISTENERS__) return;
+            window.__WWEBJS_CORE_LISTENERS__ = true;
+
             window.AuthStore.AppState.on("change:state", (_AppState, state) => {
                 window.onAuthAppStateChangedEvent(state);
             });
@@ -382,6 +376,20 @@ class Client extends EventEmitter {
                 await window.onLogoutEvent();
             });
         });
+
+        this._bindingsExposed = true;
+    }
+
+    async grabFirstPage(browser) {
+        const start = Date.now();
+        while (Date.now() - start < 3000) {
+            const pages = await browser.pages();
+            if (pages.length) {
+                return pages[0];
+            }
+            await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        return await browser.newPage();
     }
 
     /**
@@ -397,67 +405,36 @@ class Client extends EventEmitter {
              */
             page;
 
-        console.debug("Initializing WhatsApp Web client..."); // DEBUG
-
         browser = null;
         page = null;
 
         await this.authStrategy.beforeBrowserInitialized();
-        console.debug("Auth strategy beforeBrowserInitialized completed."); // DEBUG
 
         const puppeteerOpts = this.options.puppeteer;
         if (puppeteerOpts && puppeteerOpts.browserWSEndpoint) {
-            console.debug(
-                `Connecting to existing browser via endpoint: ${puppeteerOpts.browserWSEndpoint}`
-            ); // DEBUG
-            try {
-                browser = await puppeteer.connect(puppeteerOpts);
-                // Wait for initial page target to appear.
-                const target = await browser.waitForTarget(
-                    (t) => t.type() === "page"
-                );
-                page = await target.page();
-                console.debug("Connected to browser and obtained page."); // DEBUG
-                if (!page) {
-                    console.debug("No existing page found, creating new one."); // DEBUG
-                    page = await browser.newPage(); // Create a new page if none exists
-                }
-            } catch (err) {
-                console.error("Error connecting to browser endpoint:", err); // DEBUG
-                throw err;
-            }
-        } else {
-            console.debug("Launching new browser instance."); // DEBUG
-            try {
-                const browserArgs = [...(puppeteerOpts.args || [])];
-                if (!browserArgs.find((arg) => arg.includes("--user-agent"))) {
-                    browserArgs.push(`--user-agent=${this.options.userAgent}`);
-                }
-                // navigator.webdriver fix
-                browserArgs.push(
-                    "--disable-blink-features=AutomationControlled"
-                );
+            browser = await puppeteer.connect({
+                ...puppeteerOpts,
+                waitForInitialPage: false,
+            });
 
-                browser = await puppeteer.launch({
-                    ...puppeteerOpts,
-                    args: browserArgs,
-                });
-                page = (await browser.pages())[0];
-                if (!page) {
-                    console.debug(
-                        "No initial page found in new browser, creating one."
-                    ); // DEBUG
-                    page = await browser.newPage(); // Create a new page if none exists
-                }
-                console.debug("Launched new browser and obtained page."); // DEBUG
-            } catch (err) {
-                console.error("Error launching new browser:", err); // DEBUG
-                throw err;
+            page = await this.grabFirstPage(browser);
+            console.debug("Reusing old browser instance");
+        } else {
+            const browserArgs = [...(puppeteerOpts.args || [])];
+            if (!browserArgs.find((arg) => arg.includes("--user-agent"))) {
+                browserArgs.push(`--user-agent=${this.options.userAgent}`);
             }
+
+            browser = await puppeteer.launch({
+                ...puppeteerOpts,
+                args: browserArgs,
+                waitForInitialPage: false,
+            });
+            page = await this.grabFirstPage(browser);
+            console.debug("Launched new browser and obtained page.");
         }
 
-        if (this.options.proxyAuthentication !== undefined) {
-            console.debug("Applying proxy authentication."); // DEBUG
+        if (this.options.proxyAuthentication) {
             await page.authenticate(this.options.proxyAuthentication);
         }
 
@@ -468,135 +445,31 @@ class Client extends EventEmitter {
         this.pupPage = page;
 
         await this.authStrategy.afterBrowserInitialized();
-        console.debug("Auth strategy afterBrowserInitialized completed."); // DEBUG
         await this.initWebVersionCache();
-        console.debug("Web version cache initialized."); // DEBUG
-
-        // <<< MODIFICATION START >>>
-
-        // --- Enhanced Page Targeting --- START ---
-        console.debug("Attempting to find WhatsApp Web page..."); // DEBUG
-        let waPage = null;
-        const pages = await browser.pages();
-        console.debug(`Found ${pages.length} pages in the browser.`); // DEBUG
-        for (const p of pages) {
-            try {
-                const url = p.url();
-                console.debug(`Checking page URL: ${url}`); // DEBUG
-                if (url.startsWith(WhatsWebURL)) {
-                    console.debug(`Found WhatsApp Web page: ${url}`); // DEBUG
-                    waPage = p;
-                    break;
-                }
-            } catch (err) {
-                console.warn(
-                    `Error checking page URL: ${err.message}. Skipping page.`
-                ); // DEBUG
-            }
-        }
-
-        if (!waPage) {
-            console.debug(
-                "WhatsApp Web page not found among existing pages. Using the initial page or creating a new one for navigation."
-            ); // DEBUG
-            // If the originally obtained 'page' is usable (not closed, etc.), use it.
-            // Otherwise, create a new one. This handles cases where the initial page might be invalid.
-            try {
-                if (!page || page.isClosed()) {
-                    console.debug(
-                        "Initial page is closed or invalid, creating a new page."
-                    ); // DEBUG
-                    page = await browser.newPage();
-                } else {
-                    console.debug(
-                        "Using the initially obtained page for navigation."
-                    ); // DEBUG
-                    // 'page' is already assigned from the connect/launch logic
-                }
-                waPage = page; // The page we will navigate
-            } catch (newPageErr) {
-                console.error(
-                    "Error obtaining a page for navigation:",
-                    newPageErr
-                ); // DEBUG
-                throw newPageErr;
-            }
-        } else {
-            console.debug("Using the found WhatsApp Web page."); // DEBUG
-            // If we found the WA page, make it the primary page for the client
-            page = waPage;
-            this.pupPage = page; // Ensure client uses the correct page object
-        }
-        // --- Enhanced Page Targeting --- END ---
 
         let isAlreadyInitialized = false;
-        let currentPageUrl = "";
-        try {
-            // Now, use the 'page' variable which should point to the correct WA page if found, or the page to navigate.
-            currentPageUrl = page.url();
-            console.debug(`Current page URL for check: ${currentPageUrl}`); // DEBUG
+        const currentPageUrl = page.url();
 
-            // Check if we are on the correct URL and if WWebJS is present
-            if (currentPageUrl.startsWith(WhatsWebURL)) {
-                console.debug(
-                    "Page is on WhatsApp Web URL. Checking for existing initialization..."
-                ); // DEBUG
-                isAlreadyInitialized = await page.evaluate(() => {
-                    const initialized =
-                        typeof window.WWebJS !== "undefined" &&
-                        typeof window.Store !== "undefined";
-                    console.debug(
-                        `[Browser] Checking for initialization: WWebJS=${typeof window.WWebJS}, Store=${typeof window.Store}, Result=${initialized}`
-                    ); // DEBUG in browser
-                    return initialized;
-                });
-                console.debug(
-                    `Page initialization status: ${isAlreadyInitialized}`
-                ); // DEBUG
-            } else {
-                console.debug(
-                    "Page is not on WhatsApp Web URL, proceeding with full initialization."
-                ); // DEBUG
-            }
-        } catch (e) {
-            console.warn(
-                "Could not determine if page is already initialized:",
-                e
-            ); // DEBUG
-            isAlreadyInitialized = false;
+        // Check if we are on the correct URL and if WWebJS is present
+        if (currentPageUrl.startsWith(WhatsWebURL)) {
+            isAlreadyInitialized = await page.evaluate(() => {
+                const initialized =
+                    typeof window.WWebJS !== "undefined" &&
+                    typeof window.Store !== "undefined";
+                return initialized;
+            });
         }
-
         if (isAlreadyInitialized) {
-            console.log(
-                "[INFO] Page already initialized, attempting to re-attach state and listeners..."
-            ); // DEBUG
             try {
-                // Re-fetch client info
-                console.debug("Re-fetching client info..."); // DEBUG
                 const infoData = await page.evaluate(() => {
-                    console.debug(
-                        "[Browser] Fetching Conn.serialize and User.getMeUser for re-attachment."
-                    ); // DEBUG in browser
-                    if (
-                        !window.Store ||
-                        !window.Store.Conn ||
-                        !window.Store.User
-                    ) {
-                        console.error(
-                            "[Browser] Required Store objects (Conn, User) not found during re-fetch."
-                        ); // DEBUG in browser
-                        return null;
-                    }
+                    if (!window.Store?.Conn || !window.Store.User) return null;
+
                     try {
                         return {
                             ...window.Store.Conn.serialize(),
                             wid: window.Store.User.getMeUser(),
                         };
-                    } catch (err) {
-                        console.error(
-                            "[Browser] Error fetching info data:",
-                            err
-                        ); // DEBUG in browser
+                    } catch (_) {
                         return null;
                     }
                 });
@@ -608,61 +481,32 @@ class Client extends EventEmitter {
                 }
 
                 this.info = new ClientInfo(this, infoData);
-                console.debug(
-                    "Client info re-fetched successfully:",
-                    this.info.wid
-                ); // DEBUG
 
                 // Re-create interface controller
                 this.interface = new InterfaceController(this);
-                console.debug("InterfaceController re-created."); // DEBUG
 
                 // Re-attach event listeners to bridge to this new Node instance
-                console.debug("Attempting to re-attach event listeners..."); // DEBUG
                 await this.attachEventListeners();
-                console.debug("Event listeners re-attached."); // DEBUG
 
-                // Manually emit ready, as we skipped the normal inject flow's emit
-                console.debug("Emitting READY event for re-attached client."); // DEBUG
+                // Manually emit ready, as we skipped the normal inject flow emit
                 this.emit(Events.READY);
-                this.authStrategy.afterAuthReady(); // Notify strategy
-                console.log(
-                    "[INFO] Re-attachment attempt finished successfully."
-                ); // DEBUG
+                this.authStrategy.afterAuthReady();
             } catch (err) {
-                console.error(
-                    "[ERROR] Failed to re-attach to initialized page:",
-                    err
-                ); // DEBUG
                 await this.destroy().catch((e) =>
                     console.error(
                         "Error destroying client after re-attachment failure:",
                         e
                     )
-                ); // Attempt cleanup
+                );
                 throw new Error(
                     `Failed to reconnect state to existing page: ${err.message}`
                 );
             }
         } else {
-            // This block now executes only if the WA page wasn't found OR if it was found but wasn't initialized.
-            if (!currentPageUrl.startsWith(WhatsWebURL)) {
-                console.log(
-                    "[INFO] WhatsApp Web page not found or is on wrong URL. Performing full initialization with navigation..."
-                ); // DEBUG
-            } else {
-                // This case means currentPageUrl *was* WhatsWebURL, but isAlreadyInitialized was false.
-                console.log(
-                    "[INFO] WhatsApp Web page found, but not initialized. Performing full initialization (injection only)..."
-                ); // DEBUG
-            }
-
             // ocVersion (isOfficialClient patch)
             // remove after 2.3000.x hard release
             // Needs to run before goto only if we are actually navigating
-            console.debug(
-                "Applying ocVersion patch (evaluateOnNewDocument)..."
-            ); // DEBUG
+
             await page.evaluateOnNewDocument(() => {
                 const originalError = Error;
                 window.originalError = originalError;
@@ -678,72 +522,34 @@ class Client extends EventEmitter {
                 };
             });
 
-            console.debug(`Navigating to WhatsApp Web URL: ${WhatsWebURL}`); // DEBUG
             await page.goto(WhatsWebURL, {
                 waitUntil: "load",
-                timeout: 0, // Setting timeout to 0 disables it. Consider if a timeout is needed.
+                timeout: 0,
                 referer: "https://whatsapp.com/",
             });
-            console.debug("Navigation complete. Starting injection process..."); // DEBUG
 
             await this.inject();
-            console.debug("Injection process completed."); // DEBUG
         }
-        // <<< MODIFICATION END >>>
 
-        // Attaching framenavigated listener AFTER potential re-attachment or injection
-        console.debug("Attaching framenavigated listener."); // DEBUG
         this.pupPage.on("framenavigated", async (frame) => {
-            console.debug(`Frame navigated: ${frame.url()}`); // DEBUG
             if (frame.url().includes("post_logout=1") || this.lastLoggedOut) {
-                console.log("[INFO] Logout detected via framenavigated event."); // DEBUG
                 this.emit(Events.DISCONNECTED, "LOGOUT");
                 await this.authStrategy
                     .logout()
                     .catch((e) =>
                         console.error("Error during authStrategy.logout:", e)
                     );
-                // Potentially skip these if destroy handles browser closing? Check strategy logic.
-                // await this.authStrategy.beforeBrowserInitialized().catch(e => console.error('Error during authStrategy.beforeBrowserInitialized on logout:', e));
-                // await this.authStrategy.afterBrowserInitialized().catch(e => console.error('Error during authStrategy.afterBrowserInitialized on logout:', e));
                 await this.destroy().catch((e) =>
                     console.error("Error destroying client after logout:", e)
                 );
                 this.lastLoggedOut = false;
                 return;
             }
-            // Original logic was to call inject() here.
-            // This might cause issues if we re-attached. Need careful consideration.
-            // If the main frame navigates away from WAWeb URL after successful initialization/reattachment,
-            // we might need to re-inject or handle it as a disconnect.
-            // For now, let's log and avoid re-injecting automatically in the re-attach scenario.
+
             if (!isAlreadyInitialized && frame.url().startsWith(WhatsWebURL)) {
-                console.debug(
-                    "Frame navigated to WAWeb URL after initial load, attempting injection (standard flow)."
-                ); // DEBUG
-                try {
-                    await this.inject();
-                } catch (err) {
-                    console.error(
-                        "Error during inject() triggered by framenavigated:",
-                        err
-                    ); // DEBUG
-                }
-            } else if (
-                isAlreadyInitialized &&
-                !frame.url().startsWith(WhatsWebURL)
-            ) {
-                console.warn(
-                    `[WARN] Frame navigated away from WhatsApp Web URL (${frame.url()}) after re-attachment. Client state might be invalid.`
-                ); // DEBUG
-                // Consider emitting a disconnected event or attempting recovery.
-            } else if (frame.url().startsWith(WhatsWebURL)) {
-                console.debug(
-                    "Frame navigated, but either re-attached or not the main WAWeb URL. No automatic inject."
-                ); // DEBUG
+                await this.inject();
             }
         });
-        console.debug("Initialization process finished."); // DEBUG
     }
 
     /**
@@ -775,6 +581,19 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        await this.pupPage.evaluate(() => {
+            Object.keys(window)
+                .filter((k) => k.startsWith("on") && k.endsWith("Event"))
+                .forEach((k) => delete window[k]);
+
+            ["Msg", "Chat", "Call", "AppState", "PollVote"].forEach((name) => {
+                const store = window.Store[name];
+                if (store && typeof store.off === "function") {
+                    store.off();
+                }
+            });
+        });
+
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onAddMessageEvent",
@@ -1377,7 +1196,7 @@ class Client extends EventEmitter {
      * Closes the client
      */
     async destroy() {
-        const browserPid = this.pupBrowser?.process().pid;
+        const browserPid = this.pupBrowser?.process()?.pid;
         await this.pupBrowser?.close();
         await this.authStrategy?.destroy();
 
@@ -1577,7 +1396,6 @@ class Client extends EventEmitter {
                         message: e.message,
                         stack: e.stack,
                         code: e.code,
-                        media: options.media,
                         chatId: chatWid,
                     };
                 }
