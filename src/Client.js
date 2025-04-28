@@ -2,7 +2,6 @@
 
 const EventEmitter = require("events");
 const puppeteer = require("puppeteer");
-const moduleRaid = require("@pedroslopez/moduleraid/moduleraid");
 
 const Util = require("./util/Util");
 const InterfaceController = require("./util/InterfaceController");
@@ -14,10 +13,6 @@ const {
 } = require("./util/Constants");
 const { ExposeAuthStore } = require("./util/Injected/AuthStore/AuthStore");
 const { ExposeStore } = require("./util/Injected/Store");
-const {
-    ExposeLegacyAuthStore,
-} = require("./util/Injected/AuthStore/LegacyAuthStore");
-const { ExposeLegacyStore } = require("./util/Injected/LegacyStore");
 const { LoadUtils } = require("./util/Injected/Utils");
 const ChatFactory = require("./factories/ChatFactory");
 const ContactFactory = require("./factories/ContactFactory");
@@ -41,6 +36,7 @@ const {
 const NoAuth = require("./authStrategies/NoAuth");
 const { exposeFunctionIfAbsent } = require("./util/Puppeteer");
 const treeKill = require("tree-kill");
+const { debounce } = require("./util/debounce");
 
 /**
  * SendMessageError represents an error that occurred during message sending
@@ -110,6 +106,8 @@ class Client extends EventEmitter {
 
         this.authStrategy.setup(this);
 
+        this.debouncedInject = debounce(this.inject.bind(this), 500);
+
         /**
          * @type {puppeteer.Browser}
          */
@@ -176,7 +174,9 @@ class Client extends EventEmitter {
                             "Runtime.removeBinding",
                             { name }
                         );
-                        await new Promise((resolve) => setTimeout(resolve, 50));
+                        await new Promise((resolve) =>
+                            setTimeout(resolve, 200)
+                        );
                     } else {
                         console.warn(
                             `WWebJS: Puppeteer client not connected, cannot remove binding ${name}`
@@ -488,7 +488,7 @@ class Client extends EventEmitter {
                 timeout: 0,
                 referer: "https://whatsapp.com/",
             });
-            await this.inject();
+            await this.debouncedInject();
         } else {
             const infoData = await page.evaluate(() => ({
                 ...window.Store.Conn.serialize(),
@@ -531,7 +531,7 @@ class Client extends EventEmitter {
                 console.log(
                     "[DEBUG] Page loaded/navigated, attempting injection..."
                 );
-                await this.inject();
+                await this.debouncedInject();
             } else if (alreadyInjected) {
                 console.log(
                     "[DEBUG] Page loaded/navigated, WWebJS already injected, skipping inject()."
