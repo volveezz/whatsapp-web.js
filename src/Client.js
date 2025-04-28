@@ -67,8 +67,6 @@ class SendMessageError extends Error {
  * @param {number} options.authTimeoutMs - Timeout for authentication selector in puppeteer
  * @param {object} options.puppeteer - Puppeteer launch options. View docs here: https://github.com/puppeteer/puppeteer/
  * @param {number} options.qrMaxRetries - How many times should the qrcode be refreshed before giving up
- * @param {string} options.restartOnAuthFail  - @deprecated This option should be set directly on the LegacySessionAuth.
- * @param {object} options.session - @deprecated Only here for backwards-compatibility. You should move to using LocalAuth, or set the authStrategy to LegacySessionAuth explicitly.
  * @param {number} options.takeoverOnConflict - If another whatsapp web session is detected (another browser), take over the session in the current browser
  * @param {number} options.takeoverTimeoutMs - How much time to wait before taking over the session
  * @param {string} options.userAgent - User agent to use in puppeteer
@@ -126,49 +124,62 @@ class Client extends EventEmitter {
 
         Util.setFfmpegPath(this.options.ffmpegPath);
     }
+
     /**
      * Injection logic
      * Private function
      */
     async inject() {
-        if (this._bindingsExposed) return;
+        // helper to always replace a page binding
+        const replaceBinding = async (name, fn) => {
+            // 1) clear any old global
+            await this.pupPage.evaluate((n) => {
+                delete window[n];
+            }, name);
+            // 2) remove any existing Puppeteer binding
+            try {
+                await this.pupPage._client.send("Runtime.removeBinding", {
+                    name,
+                });
+            } catch {
+                // ignore if not exist
+            }
+            // 3) re-expose the function
+            await this.pupPage.exposeFunction(name, fn);
+        };
 
+        // wait until Debug.VERSION shows up
         await this.pupPage.waitForFunction(
-            "window.Debug?.VERSION != undefined",
+            "window.Debug?.VERSION !== undefined",
             { timeout: this.options.authTimeoutMs }
         );
 
         const version = await this.getWWebVersion();
-        const isCometOrAbove = parseInt(version.split(".")?.[1]) >= 3000;
 
+        // inject core store–access helpers
         await this.pupPage.evaluate(ExposeAuthStore);
 
+        // wait for AuthStore ready state
         const needAuthentication = await this.pupPage.evaluate(async () => {
             let state = window.AuthStore.AppState.state;
-
             if (["OPENING", "UNLAUNCHED", "PAIRING"].includes(state)) {
-                // wait till state changes
-                await new Promise((r) => {
-                    window.AuthStore.AppState.on(
-                        "change:state",
-                        function waitTillInit(_AppState, state) {
-                            if (
-                                !["OPENING", "UNLAUNCHED", "PAIRING"].includes(
-                                    state
-                                )
-                            ) {
-                                window.AuthStore.AppState.off(
-                                    "change:state",
-                                    waitTillInit
-                                );
-                                r();
-                            }
+                await new Promise((resolve) => {
+                    const watcher = (_s, st) => {
+                        if (
+                            !["OPENING", "UNLAUNCHED", "PAIRING"].includes(st)
+                        ) {
+                            window.AuthStore.AppState.off(
+                                "change:state",
+                                watcher
+                            );
+                            resolve();
                         }
-                    );
+                    };
+                    window.AuthStore.AppState.on("change:state", watcher);
                 });
+                state = window.AuthStore.AppState.state;
             }
-            state = window.AuthStore.AppState.state;
-            return state == "UNPAIRED" || state == "UNPAIRED_IDLE";
+            return state === "UNPAIRED" || state === "UNPAIRED_IDLE";
         });
 
         if (needAuthentication) {
@@ -189,207 +200,151 @@ class Client extends EventEmitter {
                 }
                 return;
             }
-
-            // Register qr events
+            // QR events
             let qrRetries = 0;
-            await exposeFunctionIfAbsent(
-                this.pupPage,
-                "onQRChangedEvent",
-                async (qr) => {
-                    /**
-                     * Emitted when a QR code is received
-                     * @event Client#qr
-                     * @param {string} qr QR Code
-                     */
-                    this.emit(Events.QR_RECEIVED, qr);
-                    if (this.options.qrMaxRetries > 0) {
-                        qrRetries++;
-                        if (qrRetries > this.options.qrMaxRetries) {
-                            this.emit(
-                                Events.DISCONNECTED,
-                                "Max qrcode retries reached"
-                            );
-                            await this.destroy();
-                        }
-                    }
+            await replaceBinding("onQRChangedEvent", async (qr) => {
+                this.emit(Events.QR_RECEIVED, qr);
+                if (
+                    this.options.qrMaxRetries > 0 &&
+                    ++qrRetries > this.options.qrMaxRetries
+                ) {
+                    this.emit(
+                        Events.DISCONNECTED,
+                        "Max qrcode retries reached"
+                    );
+                    await this.destroy();
                 }
-            );
+            });
 
             await this.pupPage.evaluate(async () => {
-                const registrationInfo =
+                // build QR payload
+                const reg =
                     await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-                const noiseKeyPair =
+                const noise =
                     await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-                const staticKeyB64 = window.AuthStore.Base64Tools.encodeB64(
-                    noiseKeyPair.staticKeyPair.pubKey
+                const staticKey = window.AuthStore.Base64Tools.encodeB64(
+                    noise.staticKeyPair.pubKey
                 );
-                const identityKeyB64 = window.AuthStore.Base64Tools.encodeB64(
-                    registrationInfo.identityKeyPair.pubKey
+                const identityKey = window.AuthStore.Base64Tools.encodeB64(
+                    reg.identityKeyPair.pubKey
                 );
-                const advSecretKey =
+                const advSecret =
                     await window.AuthStore.RegistrationUtils.getADVSecretKey();
-                const platform =
-                    window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
-                const getQR = (ref) =>
-                    ref +
-                    "," +
-                    staticKeyB64 +
-                    "," +
-                    identityKeyB64 +
-                    "," +
-                    advSecretKey +
-                    "," +
-                    platform;
+                const plat = window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
+                const makeQR = (ref) =>
+                    `${ref},${staticKey},${identityKey},${advSecret},${plat}`;
 
-                window.onQRChangedEvent(getQR(window.AuthStore.Conn.ref)); // initial qr
+                // initial + future
+                window.onQRChangedEvent(makeQR(window.AuthStore.Conn.ref));
+                window.AuthStore.Conn.off("change:ref");
                 window.AuthStore.Conn.on("change:ref", (_, ref) => {
-                    window.onQRChangedEvent(getQR(ref));
-                }); // future QR changes
+                    window.onQRChangedEvent(makeQR(ref));
+                });
             });
         }
 
-        await exposeFunctionIfAbsent(
-            this.pupPage,
-            "onAuthAppStateChangedEvent",
-            async (state) => {
-                if (state == "UNPAIRED_IDLE") {
-                    // refresh qr code
-                    window.Store.Cmd.refreshQR();
-                }
+        // always replace these three bindings
+        await replaceBinding("onAuthAppStateChangedEvent", async (state) => {
+            if (state === "UNPAIRED_IDLE") {
+                window.Store.Cmd.refreshQR();
             }
-        );
+        });
 
-        await exposeFunctionIfAbsent(
-            this.pupPage,
-            "onAppStateHasSyncedEvent",
-            async () => {
-                const authEventPayload =
-                    await this.authStrategy.getAuthEventPayload();
-                /**
-                 * Emitted when authentication is successful
-                 * @event Client#authenticated
-                 */
-                this.emit(Events.AUTHENTICATED, authEventPayload);
+        await replaceBinding("onAppStateHasSyncedEvent", async () => {
+            const payload = await this.authStrategy.getAuthEventPayload();
+            this.emit(Events.AUTHENTICATED, payload);
 
-                const injected = await this.pupPage.evaluate(async () => {
-                    return (
-                        typeof window.Store !== "undefined" &&
-                        typeof window.WWebJS !== "undefined"
+            // only inject Store/WWebJS once per session
+            const already = await this.pupPage.evaluate(
+                () =>
+                    typeof window.Store !== "undefined" &&
+                    typeof window.WWebJS !== "undefined"
+            );
+            if (!already) {
+                // optional local caching
+                if (
+                    this.options.webVersionCache.type === "local" &&
+                    this.currentIndexHtml
+                ) {
+                    const { type, ...opts } = this.options.webVersionCache;
+                    await WebCacheFactory.createWebCache(type, opts).persist(
+                        this.currentIndexHtml,
+                        version
                     );
-                });
-
-                if (!injected) {
-                    if (
-                        this.options.webVersionCache.type === "local" &&
-                        this.currentIndexHtml
-                    ) {
-                        const { type: webCacheType, ...webCacheOptions } =
-                            this.options.webVersionCache;
-                        const webCache = WebCacheFactory.createWebCache(
-                            webCacheType,
-                            webCacheOptions
-                        );
-
-                        await webCache.persist(this.currentIndexHtml, version);
-                    }
-
-                    if (isCometOrAbove) {
-                        await this.pupPage.evaluate(ExposeStore);
-                    } else {
-                        // make sure all modules are ready before injection
-                        // 2 second delay after authentication makes sense and does not need to be made dyanmic or removed
-                        await new Promise((r) => setTimeout(r, 2000));
-                        await this.pupPage.evaluate(ExposeLegacyStore);
-                    }
-
-                    // Check window.Store Injection
-                    await this.pupPage.waitForFunction(
-                        "window.Store != undefined"
-                    );
-
-                    /**
-                     * Current connection information
-                     * @type {ClientInfo}
-                     */
-                    this.info = new ClientInfo(
-                        this,
-                        await this.pupPage.evaluate(() => {
-                            return {
-                                ...window.Store.Conn.serialize(),
-                                wid: window.Store.User.getMeUser(),
-                            };
-                        })
-                    );
-
-                    this.interface = new InterfaceController(this);
-
-                    //Load util functions (serializers, helper functions)
-                    await this.pupPage.evaluate(LoadUtils);
-
-                    await this.attachEventListeners();
                 }
-                /**
-                 * Emitted when the client has initialized and is ready to receive messages.
-                 * @event Client#ready
-                 */
-                this.emit(Events.READY);
-                this.authStrategy.afterAuthReady();
+                await this.pupPage.evaluate(ExposeStore);
+
+                // wait for Store
+                await this.pupPage.waitForFunction(
+                    "window.Store !== undefined"
+                );
+                // set client info & interface
+                this.info = new ClientInfo(
+                    this,
+                    await this.pupPage.evaluate(() => ({
+                        ...window.Store.Conn.serialize(),
+                        wid: window.Store.User.getMeUser(),
+                    }))
+                );
+                this.interface = new InterfaceController(this);
+                await this.pupPage.evaluate(LoadUtils);
+                await this.attachEventListeners();
             }
-        );
+
+            this.emit(Events.READY);
+            this.authStrategy.afterAuthReady();
+        });
+
         let lastPercent = null;
-        await exposeFunctionIfAbsent(
-            this.pupPage,
+        await replaceBinding(
             "onOfflineProgressUpdateEvent",
             async (percent) => {
-                if (lastPercent !== percent) {
+                if (percent !== lastPercent) {
                     lastPercent = percent;
                     this.emit(Events.LOADING_SCREEN, percent);
                 }
             }
         );
-        await exposeFunctionIfAbsent(
-            this.pupPage,
-            "onLogoutEvent",
-            async () => {
-                this.lastLoggedOut = true;
-                await this.pupPage
-                    .waitForNavigation({ waitUntil: "load", timeout: 5000 })
-                    .catch((_) => _);
-            }
-        );
-        await this.pupPage.evaluate(() => {
-            if (window.__WWEBJS_CORE_LISTENERS__) return;
-            window.__WWEBJS_CORE_LISTENERS__ = true;
 
-            window.AuthStore.AppState.on("change:state", (_AppState, state) => {
-                window.onAuthAppStateChangedEvent(state);
-            });
-            window.AuthStore.AppState.on("change:hasSynced", () => {
-                window.onAppStateHasSyncedEvent();
-            });
-            window.AuthStore.Cmd.on("offline_progress_update", () => {
-                window.onOfflineProgressUpdateEvent(
-                    window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
-                );
-            });
-            window.AuthStore.Cmd.on("logout", async () => {
-                await window.onLogoutEvent();
-            });
+        await replaceBinding("onLogoutEvent", async () => {
+            this.lastLoggedOut = true;
+            await this.pupPage
+                .waitForNavigation({ waitUntil: "load", timeout: 5000 })
+                .catch(() => {});
         });
 
-        this._bindingsExposed = true;
+        // tear down old core listeners, then reinstall
+        await this.pupPage.evaluate(() => {
+            // remove all handlers
+            window.AuthStore.AppState.off("change:state");
+            window.AuthStore.AppState.off("change:hasSynced");
+            window.AuthStore.Cmd.off("offline_progress_update");
+            window.AuthStore.Cmd.off("logout");
+
+            // add fresh ones
+            window.AuthStore.AppState.on("change:state", (_s, st) =>
+                window.onAuthAppStateChangedEvent(st)
+            );
+            window.AuthStore.AppState.on("change:hasSynced", () =>
+                window.onAppStateHasSyncedEvent()
+            );
+            window.AuthStore.Cmd.on("offline_progress_update", () =>
+                window.onOfflineProgressUpdateEvent(
+                    window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
+                )
+            );
+            window.AuthStore.Cmd.on("logout", async () =>
+                window.onLogoutEvent()
+            );
+        });
     }
 
     async grabFirstPage(browser) {
-        const start = Date.now();
-        while (Date.now() - start < 3000) {
-            const pages = await browser.pages();
-            if (pages.length) {
-                return pages[0];
-            }
-            await new Promise((resolve) => setTimeout(resolve, 150));
-        }
-        return await browser.newPage();
+        const pages = await browser.pages();
+
+        const page = pages.find((page) => page.url() === WhatsWebURL);
+
+        return page || (await browser.newPage());
     }
 
     /**
@@ -411,28 +366,20 @@ class Client extends EventEmitter {
         await this.authStrategy.beforeBrowserInitialized();
 
         const puppeteerOpts = this.options.puppeteer;
-        if (puppeteerOpts && puppeteerOpts.browserWSEndpoint) {
+        if (puppeteerOpts?.browserWSEndpoint) {
             browser = await puppeteer.connect({
                 ...puppeteerOpts,
                 waitForInitialPage: false,
             });
-
-            page = await this.grabFirstPage(browser);
-            console.debug("Reusing old browser instance");
         } else {
-            const browserArgs = [...(puppeteerOpts.args || [])];
-            if (!browserArgs.find((arg) => arg.includes("--user-agent"))) {
-                browserArgs.push(`--user-agent=${this.options.userAgent}`);
-            }
-
             browser = await puppeteer.launch({
                 ...puppeteerOpts,
-                args: browserArgs,
+                args: puppeteerOpts.args || [],
                 waitForInitialPage: false,
             });
-            page = await this.grabFirstPage(browser);
-            console.debug("Launched new browser and obtained page.");
         }
+
+        page = await this.grabFirstPage(browser);
 
         if (this.options.proxyAuthentication) {
             await page.authenticate(this.options.proxyAuthentication);
@@ -448,107 +395,46 @@ class Client extends EventEmitter {
         await this.initWebVersionCache();
 
         let isAlreadyInitialized = false;
-        const currentPageUrl = page.url();
-
-        // Check if we are on the correct URL and if WWebJS is present
-        if (currentPageUrl.startsWith(WhatsWebURL)) {
-            isAlreadyInitialized = await page.evaluate(() => {
-                const initialized =
-                    typeof window.WWebJS !== "undefined" &&
-                    typeof window.Store !== "undefined";
-                return initialized;
-            });
+        const url = page.url();
+        if (url.startsWith(WhatsWebURL)) {
+            isAlreadyInitialized = await page.evaluate(
+                () =>
+                    typeof window.Store !== "undefined" &&
+                    typeof window.WWebJS !== "undefined"
+            );
         }
-        if (isAlreadyInitialized) {
-            try {
-                const infoData = await page.evaluate(() => {
-                    if (!window.Store?.Conn || !window.Store.User) return null;
 
-                    try {
-                        return {
-                            ...window.Store.Conn.serialize(),
-                            wid: window.Store.User.getMeUser(),
-                        };
-                    } catch (_) {
-                        return null;
-                    }
-                });
-
-                if (!infoData) {
-                    throw new Error(
-                        "Failed to retrieve client info from initialized page. Required Store objects might be missing."
-                    );
-                }
-
-                this.info = new ClientInfo(this, infoData);
-
-                // Re-create interface controller
-                this.interface = new InterfaceController(this);
-
-                // Re-attach event listeners to bridge to this new Node instance
-                await this.attachEventListeners();
-
-                // Manually emit ready, as we skipped the normal inject flow emit
-                this.emit(Events.READY);
-                this.authStrategy.afterAuthReady();
-            } catch (err) {
-                await this.destroy().catch((e) =>
-                    console.error(
-                        "Error destroying client after re-attachment failure:",
-                        e
-                    )
-                );
-                throw new Error(
-                    `Failed to reconnect state to existing page: ${err.message}`
-                );
-            }
-        } else {
-            // ocVersion (isOfficialClient patch)
-            // remove after 2.3000.x hard release
-            // Needs to run before goto only if we are actually navigating
-
-            await page.evaluateOnNewDocument(() => {
-                const originalError = Error;
-                window.originalError = originalError;
-                //eslint-disable-next-line no-global-assign
-                Error = function (message) {
-                    const error = new originalError(message);
-                    const originalStack = error.stack;
-                    if (error.stack.includes("moduleRaid"))
-                        error.stack =
-                            originalStack +
-                            "\\n    at https://web.whatsapp.com/vendors~lazy_loaded_low_priority_components.05e98054dbd60f980427.js:2:44";
-                    return error;
-                };
-            });
-
+        if (!isAlreadyInitialized) {
             await page.goto(WhatsWebURL, {
                 waitUntil: "load",
                 timeout: 0,
                 referer: "https://whatsapp.com/",
             });
-
             await this.inject();
+        } else {
+            const infoData = await page.evaluate(() => ({
+                ...window.Store.Conn.serialize(),
+                wid: window.Store.User.getMeUser(),
+            }));
+            this.info = new ClientInfo(this, infoData);
+            this.interface = new InterfaceController(this);
+
+            this.emit(Events.READY);
+            this.authStrategy.afterAuthReady();
+            await this.attachEventListeners();
         }
 
         this.pupPage.on("framenavigated", async (frame) => {
             if (frame.url().includes("post_logout=1") || this.lastLoggedOut) {
                 this.emit(Events.DISCONNECTED, "LOGOUT");
-                await this.authStrategy
-                    .logout()
-                    .catch((e) =>
-                        console.error("Error during authStrategy.logout:", e)
-                    );
-                await this.destroy().catch((e) =>
-                    console.error("Error destroying client after logout:", e)
-                );
+                await this.authStrategy.logout();
+                await this.authStrategy.beforeBrowserInitialized();
+                await this.authStrategy.afterBrowserInitialized();
+                await this.destroy();
                 this.lastLoggedOut = false;
                 return;
             }
-
-            if (!isAlreadyInitialized && frame.url().startsWith(WhatsWebURL)) {
-                await this.inject();
-            }
+            await this.inject();
         });
     }
 
@@ -581,23 +467,60 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        await this.pupPage.waitForFunction(
+            "!!window.Store && !!window.Store.Msg",
+            {
+                timeout: 0,
+            }
+        );
+
         await this.pupPage.evaluate(() => {
+            const stores = ["Msg", "Chat", "Call", "AppState", "PollVote"];
+
+            // --- Store references to listeners to be removed ---
+            window.__wwebjs_listeners = window.__wwebjs_listeners || {};
+
+            for (const storeName of stores) {
+                const emitter = window.Store[storeName];
+                if (!emitter || typeof emitter.off !== "function") continue;
+
+                // Remove listeners stored from previous runs
+                if (window.__wwebjs_listeners[storeName]) {
+                    for (const [evt, handler] of Object.entries(
+                        window.__wwebjs_listeners[storeName]
+                    )) {
+                        try {
+                            emitter.off(evt, handler);
+                        } catch (e) {
+                            console.warn(
+                                `WWebJS: Failed to remove listener for ${storeName}.${evt}`,
+                                e
+                            );
+                        }
+                    }
+                }
+                window.__wwebjs_listeners[storeName] = {}; // Reset for this run
+            }
+
+            // Clear potentially old exposed functions
             Object.keys(window)
                 .filter((k) => k.startsWith("on") && k.endsWith("Event"))
-                .forEach((k) => delete window[k]);
-
-            ["Msg", "Chat", "Call", "AppState", "PollVote"].forEach((name) => {
-                const store = window.Store[name];
-                if (store && typeof store.off === "function") {
-                    store.off();
-                }
-            });
+                .forEach((k) => {
+                    try {
+                        delete window[k];
+                    } catch {}
+                });
         });
+
+        const mark = (fn) => {
+            fn.__wwebjsPatched = true;
+            return fn;
+        };
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onAddMessageEvent",
-            (msg) => {
+            mark((msg) => {
                 if (msg.type === "gp2") {
                     const notification = new GroupNotification(this, msg);
                     if (
@@ -673,7 +596,7 @@ class Client extends EventEmitter {
                  * @param {Message} message The message that was received
                  */
                 this.emit(Events.MESSAGE_RECEIVED, message);
-            }
+            })
         );
 
         let last_message;
@@ -681,7 +604,7 @@ class Client extends EventEmitter {
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onChangeMessageTypeEvent",
-            (msg) => {
+            mark((msg) => {
                 if (msg.type === "revoked") {
                     const message = new Message(this, msg);
                     let revoked_msg;
@@ -702,13 +625,13 @@ class Client extends EventEmitter {
                         revoked_msg
                     );
                 }
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onChangeMessageEvent",
-            (msg) => {
+            mark((msg) => {
                 if (msg.type !== "revoked") {
                     last_message = msg;
                 }
@@ -754,13 +677,13 @@ class Client extends EventEmitter {
                         isContact
                     );
                 }
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onRemoveMessageEvent",
-            (msg) => {
+            mark((msg) => {
                 if (!msg.isNewMsg) return;
 
                 const message = new Message(this, msg);
@@ -771,13 +694,13 @@ class Client extends EventEmitter {
                  * @param {Message} message The message that was revoked
                  */
                 this.emit(Events.MESSAGE_REVOKED_ME, message);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onMessageAckEvent",
-            (msg, ack) => {
+            mark((msg, ack) => {
                 const message = new Message(this, msg);
 
                 /**
@@ -787,26 +710,26 @@ class Client extends EventEmitter {
                  * @param {MessageAck} ack The new ACK value
                  */
                 this.emit(Events.MESSAGE_ACK, message, ack);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onChatUnreadCountEvent",
-            async (data) => {
+            mark(async (data) => {
                 const chat = await this.getChatById(data.id);
 
                 /**
                  * Emitted when the chat unread count changes
                  */
                 this.emit(Events.UNREAD_COUNT, chat);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onMessageMediaUploadedEvent",
-            (msg) => {
+            mark((msg) => {
                 const message = new Message(this, msg);
 
                 /**
@@ -815,13 +738,13 @@ class Client extends EventEmitter {
                  * @param {Message} message The message with media that was uploaded
                  */
                 this.emit(Events.MEDIA_UPLOADED, message);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onAppStateChangedEvent",
-            async (state) => {
+            mark(async (state) => {
                 /**
                  * Emitted when the connection state changes
                  * @event Client#change_state
@@ -858,13 +781,13 @@ class Client extends EventEmitter {
                     this.emit(Events.DISCONNECTED, state);
                     this.destroy();
                 }
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onBatteryStateChangedEvent",
-            (state) => {
+            mark((state) => {
                 const { battery, plugged } = state;
 
                 if (battery === undefined) return;
@@ -878,7 +801,7 @@ class Client extends EventEmitter {
                  * @deprecated
                  */
                 this.emit(Events.BATTERY_CHANGED, { battery, plugged });
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(this.pupPage, "onIncomingCall", (call) => {
@@ -902,7 +825,7 @@ class Client extends EventEmitter {
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onReaction",
-            (reactions) => {
+            mark((reactions) => {
                 for (const reaction of reactions) {
                     /**
                      * Emitted when a reaction is sent, received, updated or removed
@@ -924,13 +847,13 @@ class Client extends EventEmitter {
                         new Reaction(this, reaction)
                     );
                 }
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onRemoveChatEvent",
-            async (chat) => {
+            mark(async (chat) => {
                 const _chat = await this.getChatById(chat.id);
 
                 /**
@@ -939,13 +862,13 @@ class Client extends EventEmitter {
                  * @param {Chat} chat
                  */
                 this.emit(Events.CHAT_REMOVED, _chat);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onArchiveChatEvent",
-            async (chat, currState, prevState) => {
+            mark(async (chat, currState, prevState) => {
                 const _chat = await this.getChatById(chat.id);
 
                 /**
@@ -956,13 +879,13 @@ class Client extends EventEmitter {
                  * @param {boolean} prevState
                  */
                 this.emit(Events.CHAT_ARCHIVED, _chat, currState, prevState);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onEditMessageEvent",
-            (msg, newBody, prevBody) => {
+            mark((msg, newBody, prevBody) => {
                 if (msg.type === "revoked") {
                     return;
                 }
@@ -979,26 +902,26 @@ class Client extends EventEmitter {
                     newBody,
                     prevBody
                 );
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onAddMessageCiphertextEvent",
-            (msg) => {
+            mark((msg) => {
                 /**
                  * Emitted when messages are edited
                  * @event Client#message_ciphertext
                  * @param {Message} message
                  */
                 this.emit(Events.MESSAGE_CIPHERTEXT, new Message(this, msg));
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onPollVoteEvent",
-            (vote) => {
+            mark((vote) => {
                 const _vote = new PollVote(this, vote);
                 /**
                  * Emitted when some poll option is selected or deselected,
@@ -1006,37 +929,46 @@ class Client extends EventEmitter {
                  * @event Client#vote_update
                  */
                 this.emit(Events.VOTE_UPDATE, _vote);
-            }
+            })
         );
 
         await this.pupPage.evaluate(() => {
-            window.Store.Msg.on("change", (msg) => {
+            const attachListener = (storeName, eventName, handler) => {
+                window.__wwebjs_listeners = window.__wwebjs_listeners || {};
+                window.__wwebjs_listeners[storeName] =
+                    window.__wwebjs_listeners[storeName] || {};
+                window.__wwebjs_listeners[storeName][eventName] = handler; // Store reference
+                window.Store[storeName].on(eventName, handler);
+            };
+
+            attachListener("Msg", "change", (msg) => {
                 window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg));
             });
-            window.Store.Msg.on("change:type", (msg) => {
+            attachListener("Msg", "change:type", (msg) => {
                 window.onChangeMessageTypeEvent(
                     window.WWebJS.getMessageModel(msg)
                 );
             });
-            window.Store.Msg.on("change:ack", (msg, ack) => {
+            attachListener("Msg", "change:ack", (msg, ack) => {
                 window.onMessageAckEvent(
                     window.WWebJS.getMessageModel(msg),
                     ack
                 );
             });
-            window.Store.Msg.on("change:isUnsentMedia", (msg, unsent) => {
+            attachListener("Msg", "change:isUnsentMedia", (msg, unsent) => {
                 if (msg.id.fromMe && !unsent)
                     window.onMessageMediaUploadedEvent(
                         window.WWebJS.getMessageModel(msg)
                     );
             });
-            window.Store.Msg.on("remove", (msg) => {
+            attachListener("Msg", "remove", (msg) => {
                 if (msg.isNewMsg)
                     window.onRemoveMessageEvent(
                         window.WWebJS.getMessageModel(msg)
                     );
             });
-            window.Store.Msg.on(
+            attachListener(
+                "Msg",
                 "change:body change:caption",
                 (msg, newBody, prevBody) => {
                     window.onEditMessageEvent(
@@ -1046,21 +978,19 @@ class Client extends EventEmitter {
                     );
                 }
             );
-            window.Store.AppState.on("change:state", (_AppState, state) => {
+            attachListener("AppState", "change:state", (_AppState, state) => {
                 window.onAppStateChangedEvent(state);
             });
-            window.Store.Conn.on("change:battery", (state) => {
-                window.onBatteryStateChangedEvent(state);
-            });
-            window.Store.Call.on("add", (call) => {
+            attachListener("Call", "add", (call) => {
                 window.onIncomingCall(call);
             });
-            window.Store.Chat.on("remove", async (chat) => {
+            attachListener("Chat", "remove", async (chat) => {
                 window.onRemoveChatEvent(
                     await window.WWebJS.getChatModel(chat)
                 );
             });
-            window.Store.Chat.on(
+            attachListener(
+                "Chat",
                 "change:archive",
                 async (chat, currState, prevState) => {
                     window.onArchiveChatEvent(
@@ -1070,7 +1000,7 @@ class Client extends EventEmitter {
                     );
                 }
             );
-            window.Store.Msg.on("add", (msg) => {
+            attachListener("Msg", "add", (msg) => {
                 if (msg.isNewMsg) {
                     if (msg.type === "ciphertext") {
                         // defer message event until ciphertext is resolved (type changed)
@@ -1089,25 +1019,19 @@ class Client extends EventEmitter {
                     }
                 }
             });
-            window.Store.Chat.on("change:unreadCount", (chat) => {
+            attachListener("Chat", "change:unreadCount", (chat) => {
                 window.onChatUnreadCountEvent(chat);
             });
-            window.Store.PollVote.on("add", async (vote) => {
+            attachListener("PollVote", "add", async (vote) => {
                 const pollVoteModel = await window.WWebJS.getPollVoteModel(
                     vote
                 );
                 pollVoteModel && window.onPollVoteEvent(pollVoteModel);
             });
 
-            if (
-                window.compareWwebVersions(
-                    window.Debug.VERSION,
-                    ">=",
-                    "2.3000.1014111620"
-                )
-            ) {
-                const module = window.Store.AddonReactionTable;
-                const ogMethod = module.bulkUpsert;
+            const module = window.Store.AddonReactionTable;
+            const ogMethod = module.bulkUpsert;
+            if (!ogMethod.__wwebjsPatched) {
                 module.bulkUpsert = ((...args) => {
                     window.onReaction(
                         args[0].map((reaction) => {
@@ -1126,34 +1050,9 @@ class Client extends EventEmitter {
                             };
                         })
                     );
-
-                    return ogMethod(...args);
+                    return ogMethod.apply(module, args);
                 }).bind(module);
-            } else {
-                const module = window.Store.createOrUpdateReactionsModule;
-                const ogMethod = module.createOrUpdateReactions;
-                module.createOrUpdateReactions = ((...args) => {
-                    window.onReaction(
-                        args[0].map((reaction) => {
-                            const msgKey = window.Store.MsgKey.fromString(
-                                reaction.msgKey
-                            );
-                            const parentMsgKey = window.Store.MsgKey.fromString(
-                                reaction.parentMsgKey
-                            );
-                            const timestamp = reaction.timestamp / 1000;
-
-                            return {
-                                ...reaction,
-                                msgKey,
-                                parentMsgKey,
-                                timestamp,
-                            };
-                        })
-                    );
-
-                    return ogMethod(...args);
-                }).bind(module);
+                module.bulkUpsert.__wwebjsPatched = true;
             }
         });
     }
