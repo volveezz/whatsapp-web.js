@@ -147,20 +147,64 @@ class Client extends EventEmitter {
         try {
             // helper to always replace a page binding
             const replaceBinding = async (name, fn) => {
+                if (!this.pupPage || this.pupPage.isClosed()) return;
+
                 // 1) clear any old global
-                await this.pupPage.evaluate((n) => {
-                    delete window[n];
-                }, name);
+                await this.pupPage
+                    .evaluate((n) => {
+                        if (typeof window !== "undefined") {
+                            // Adding extra check just in case
+                            if (window.hasOwnProperty(n)) {
+                                delete window[n];
+                            }
+                        }
+                    }, name)
+                    .catch((err) =>
+                        console.warn(
+                            `WWebJS: Error deleting window[${name}]:`,
+                            err.message
+                        )
+                    );
+
                 // 2) remove any existing Puppeteer binding
                 try {
-                    await this.pupPage._client.send("Runtime.removeBinding", {
-                        name,
-                    });
-                } catch {
-                    // ignore if not exist
-                }
+                    if (
+                        this.pupPage._client &&
+                        this.pupPage._client.isConnected()
+                    ) {
+                        await this.pupPage._client.send(
+                            "Runtime.removeBinding",
+                            { name }
+                        );
+                        await new Promise((resolve) => setTimeout(resolve, 50));
+                    } else {
+                        console.warn(
+                            `WWebJS: Puppeteer client not connected, cannot remove binding ${name}`
+                        );
+                    }
+                } catch (err) {}
+
                 // 3) re-expose the function
-                await this.pupPage.exposeFunction(name, fn);
+                try {
+                    if (!this.pupPage || this.pupPage.isClosed()) return;
+                    await this.pupPage.exposeFunction(name, fn);
+                } catch (exposeErr) {
+                    if (
+                        exposeErr.message.includes(
+                            `window['${name}'] already exists`
+                        )
+                    ) {
+                        console.warn(
+                            `WWebJS: exposeFunction failed for '${name}' with 'already exists'`
+                        );
+                    } else {
+                        console.error(
+                            `WWebJS: Failed to expose function ${name} with unexpected error`,
+                            exposeErr
+                        );
+                    }
+                    throw exposeErr;
+                }
             };
 
             // wait until Debug.VERSION shows up
