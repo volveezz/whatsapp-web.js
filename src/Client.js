@@ -1135,16 +1135,22 @@ class Client extends EventEmitter {
      * Logs out the client, closing the current session
      */
     async logout() {
-        await this.pupPage.evaluate(() => {
-            if (
-                window.Store &&
-                window.Store.AppState &&
-                typeof window.Store.AppState.logout === "function"
-            ) {
-                return window.Store.AppState.logout();
-            }
-        });
-        await this.pupBrowser.close();
+        await this.pupPage
+            ?.evaluate(() => {
+                if (
+                    window.Store?.AppState &&
+                    typeof window.Store.AppState.logout === "function"
+                ) {
+                    return window.Store.AppState.logout();
+                }
+            })
+            .catch((e) =>
+                console.error(
+                    "Received an error when tried to logout from the session",
+                    e
+                )
+            );
+        await this.pupBrowser?.close();
 
         let maxDelay = 0;
         while (this.pupBrowser.connected && maxDelay < 10) {
@@ -2314,7 +2320,7 @@ class Client extends EventEmitter {
      * @returns {Promise<void>}
      */
     async reinitializeCryptoStore() {
-        await this.pupPage.evaluate(async () => {
+        await this.pupPage?.evaluate(async () => {
             // Wait for CryptoLib to load
             function waitForCryptoLib(maxRetries = 30, interval = 500) {
                 return new Promise((resolve, reject) => {
