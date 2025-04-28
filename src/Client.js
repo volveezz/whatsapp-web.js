@@ -512,7 +512,36 @@ class Client extends EventEmitter {
                 this.lastLoggedOut = false;
                 return;
             }
-            await this.inject();
+
+            const alreadyInjected = await this.pupPage
+                .evaluate(() => {
+                    return (
+                        typeof window.WWebJS !== "undefined" &&
+                        typeof window.Store !== "undefined"
+                    );
+                })
+                .catch(() => false);
+
+            if (
+                this.pupPage &&
+                !this.pupPage.isClosed() &&
+                !alreadyInjected &&
+                frame.url().startsWith(WhatsWebURL)
+            ) {
+                console.log(
+                    "[DEBUG] Page loaded/navigated, attempting injection..."
+                );
+                await this.inject();
+            } else if (alreadyInjected) {
+                console.log(
+                    "[DEBUG] Page loaded/navigated, WWebJS already injected, skipping inject()."
+                );
+                await this.attachEventListeners();
+            } else {
+                console.log(
+                    `[DEBUG] Page navigated, but not injecting. URL: ${frame.url()}, Closed: ${this.pupPage?.isClosed()}, Injected: ${alreadyInjected}`
+                );
+            }
         });
     }
 
@@ -1738,6 +1767,13 @@ class Client extends EventEmitter {
      * @returns {Promise<string>}
      */
     async getProfilePicUrl(contactId) {
+        if (!this.pupPage || this.pupPage.isClosed()) {
+            console.warn(
+                "[getProfilePicUrl] Page is closed or undefined. Skipping."
+            );
+            return undefined;
+        }
+
         const profilePic = await this.pupPage.evaluate(async (contactId) => {
             try {
                 const chatWid = window.Store.WidFactory.createWid(contactId);
@@ -2369,6 +2405,13 @@ class Client extends EventEmitter {
      * @returns {Promise<void>}
      */
     async reinitializeCryptoStore() {
+        if (!this.pupPage || this.pupPage.isClosed()) {
+            console.warn(
+                "[reinitializeCryptoStore] Page is closed or undefined. Skipping."
+            );
+            return;
+        }
+
         await this.pupPage?.evaluate(async () => {
             // Wait for CryptoLib to load
             function waitForCryptoLib(maxRetries = 30, interval = 500) {
