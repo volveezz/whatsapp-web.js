@@ -1130,6 +1130,24 @@ declare namespace WAWebJS {
             content: MessageContent,
             options?: MessageEditOptions
         ) => Promise<Message | null>;
+        /**
+         * Returns link preview data from a message
+         * @returns {Object|null} Link preview data or null if no link preview
+         */
+        getLinkPreview: () => {
+            type: string;
+            source: string;
+            thumbnailUrl?: string;
+            matchedText?: string;
+            canonicalUrl?: string;
+            description?: string;
+            title?: string;
+        } | null;
+        /**
+         * Downloads and returns the link preview thumbnail as a MessageMedia object if available
+         * @returns {Promise<MessageMedia|null>} The thumbnail as a MessageMedia object or null if not available
+         */
+        downloadLinkPreviewThumbnail: () => Promise<MessageMedia | null>;
     }
 
     /** ID that represents a message */

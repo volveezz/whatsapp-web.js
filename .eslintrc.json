@@ -5,7 +5,10 @@
         "es6": true,
         "node": true
     },
-    "extends": ["eslint:recommended", "plugin:mocha/recommended"],
+    "extends": [
+        "eslint:recommended",
+        "plugin:mocha/recommended"
+    ],
     "globals": {
         "Atomics": "readonly",
         "SharedArrayBuffer": "readonly"
@@ -13,8 +16,12 @@
     "parserOptions": {
         "ecmaVersion": 2020
     },
-    "plugins": ["mocha"],
-    "ignorePatterns": ["docs"],
+    "plugins": [
+        "mocha"
+    ],
+    "ignorePatterns": [
+        "docs"
+    ],
     "rules": {
         "indent": [
             "error",
@@ -24,13 +31,5 @@
             "error",
             "unix"
         ],
-        "quotes": [
-            "error",
-            "single"
-        ],
-        "semi": [
-            "error",
-            "always"
-        ]
     }
 }
