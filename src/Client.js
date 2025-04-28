@@ -121,6 +121,7 @@ class Client extends EventEmitter {
 
         this.currentIndexHtml = null;
         this.lastLoggedOut = false;
+        this.isInjecting = false;
 
         Util.setFfmpegPath(this.options.ffmpegPath);
     }
@@ -130,213 +131,241 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
-        // helper to always replace a page binding
-        const replaceBinding = async (name, fn) => {
-            // 1) clear any old global
-            await this.pupPage.evaluate((n) => {
-                delete window[n];
-            }, name);
-            // 2) remove any existing Puppeteer binding
-            try {
-                await this.pupPage._client.send("Runtime.removeBinding", {
-                    name,
-                });
-            } catch {
-                // ignore if not exist
-            }
-            // 3) re-expose the function
-            await this.pupPage.exposeFunction(name, fn);
-        };
-
-        // wait until Debug.VERSION shows up
-        await this.pupPage.waitForFunction(
-            "window.Debug?.VERSION !== undefined",
-            { timeout: this.options.authTimeoutMs }
-        );
-
-        const version = await this.getWWebVersion();
-
-        // inject core store–access helpers
-        await this.pupPage.evaluate(ExposeAuthStore);
-
-        // wait for AuthStore ready state
-        const needAuthentication = await this.pupPage.evaluate(async () => {
-            let state = window.AuthStore.AppState.state;
-            if (["OPENING", "UNLAUNCHED", "PAIRING"].includes(state)) {
-                await new Promise((resolve) => {
-                    const watcher = (_s, st) => {
-                        if (
-                            !["OPENING", "UNLAUNCHED", "PAIRING"].includes(st)
-                        ) {
-                            window.AuthStore.AppState.off(
-                                "change:state",
-                                watcher
-                            );
-                            resolve();
-                        }
-                    };
-                    window.AuthStore.AppState.on("change:state", watcher);
-                });
-                state = window.AuthStore.AppState.state;
-            }
-            return state === "UNPAIRED" || state === "UNPAIRED_IDLE";
-        });
-
-        if (needAuthentication) {
-            const { failed, failureEventPayload, restart } =
-                await this.authStrategy.onAuthenticationNeeded();
-
-            if (failed) {
-                /**
-                 * Emitted when there has been an error while trying to restore an existing session
-                 * @event Client#auth_failure
-                 * @param {string} message
-                 */
-                this.emit(Events.AUTHENTICATION_FAILURE, failureEventPayload);
-                await this.destroy();
-                if (restart) {
-                    // session restore failed so try again but without session to force new authentication
-                    return this.initialize();
-                }
-                return;
-            }
-            // QR events
-            let qrRetries = 0;
-            await replaceBinding("onQRChangedEvent", async (qr) => {
-                this.emit(Events.QR_RECEIVED, qr);
-                if (
-                    this.options.qrMaxRetries > 0 &&
-                    ++qrRetries > this.options.qrMaxRetries
-                ) {
-                    this.emit(
-                        Events.DISCONNECTED,
-                        "Max qrcode retries reached"
-                    );
-                    await this.destroy();
-                }
-            });
-
-            await this.pupPage.evaluate(async () => {
-                // build QR payload
-                const reg =
-                    await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-                const noise =
-                    await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-                const staticKey = window.AuthStore.Base64Tools.encodeB64(
-                    noise.staticKeyPair.pubKey
-                );
-                const identityKey = window.AuthStore.Base64Tools.encodeB64(
-                    reg.identityKeyPair.pubKey
-                );
-                const advSecret =
-                    await window.AuthStore.RegistrationUtils.getADVSecretKey();
-                const plat = window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
-                const makeQR = (ref) =>
-                    `${ref},${staticKey},${identityKey},${advSecret},${plat}`;
-
-                // initial + future
-                window.onQRChangedEvent(makeQR(window.AuthStore.Conn.ref));
-                window.AuthStore.Conn.off("change:ref");
-                window.AuthStore.Conn.on("change:ref", (_, ref) => {
-                    window.onQRChangedEvent(makeQR(ref));
-                });
-            });
+        if (this.isInjecting) {
+            console.warn("WWebJS: Injection already in progress, skipping");
+            return;
+        }
+        if (!this.pupPage?.isClosed()) {
+            console.warn(
+                "WWebJS: Injection attempted on closed page, skipping"
+            );
+            return;
         }
 
-        // always replace these three bindings
-        await replaceBinding("onAuthAppStateChangedEvent", async (state) => {
-            if (state === "UNPAIRED_IDLE") {
-                window.Store.Cmd.refreshQR();
-            }
-        });
+        this.isInjecting = true;
 
-        await replaceBinding("onAppStateHasSyncedEvent", async () => {
-            const payload = await this.authStrategy.getAuthEventPayload();
-            this.emit(Events.AUTHENTICATED, payload);
+        try {
+            // helper to always replace a page binding
+            const replaceBinding = async (name, fn) => {
+                // 1) clear any old global
+                await this.pupPage.evaluate((n) => {
+                    delete window[n];
+                }, name);
+                // 2) remove any existing Puppeteer binding
+                try {
+                    await this.pupPage._client.send("Runtime.removeBinding", {
+                        name,
+                    });
+                } catch {
+                    // ignore if not exist
+                }
+                // 3) re-expose the function
+                await this.pupPage.exposeFunction(name, fn);
+            };
 
-            // only inject Store/WWebJS once per session
-            const already = await this.pupPage.evaluate(
-                () =>
-                    typeof window.Store !== "undefined" &&
-                    typeof window.WWebJS !== "undefined"
+            // wait until Debug.VERSION shows up
+            await this.pupPage.waitForFunction(
+                "window.Debug?.VERSION !== undefined",
+                { timeout: this.options.authTimeoutMs }
             );
-            if (!already) {
-                // optional local caching
-                if (
-                    this.options.webVersionCache.type === "local" &&
-                    this.currentIndexHtml
-                ) {
-                    const { type, ...opts } = this.options.webVersionCache;
-                    await WebCacheFactory.createWebCache(type, opts).persist(
-                        this.currentIndexHtml,
-                        version
+
+            const version = await this.getWWebVersion();
+
+            // inject core store–access helpers
+            await this.pupPage.evaluate(ExposeAuthStore);
+
+            // wait for AuthStore ready state
+            const needAuthentication = await this.pupPage.evaluate(async () => {
+                let state = window.AuthStore.AppState.state;
+                if (["OPENING", "UNLAUNCHED", "PAIRING"].includes(state)) {
+                    await new Promise((resolve) => {
+                        const watcher = (_s, st) => {
+                            if (
+                                !["OPENING", "UNLAUNCHED", "PAIRING"].includes(
+                                    st
+                                )
+                            ) {
+                                window.AuthStore.AppState.off(
+                                    "change:state",
+                                    watcher
+                                );
+                                resolve();
+                            }
+                        };
+                        window.AuthStore.AppState.on("change:state", watcher);
+                    });
+                    state = window.AuthStore.AppState.state;
+                }
+                return state === "UNPAIRED" || state === "UNPAIRED_IDLE";
+            });
+
+            if (needAuthentication) {
+                const { failed, failureEventPayload, restart } =
+                    await this.authStrategy.onAuthenticationNeeded();
+
+                if (failed) {
+                    /**
+                     * Emitted when there has been an error while trying to restore an existing session
+                     * @event Client#auth_failure
+                     * @param {string} message
+                     */
+                    this.emit(
+                        Events.AUTHENTICATION_FAILURE,
+                        failureEventPayload
                     );
+                    await this.destroy();
+                    if (restart) {
+                        // session restore failed so try again but without session to force new authentication
+                        return this.initialize();
+                    }
+                    return;
                 }
-                await this.pupPage.evaluate(ExposeStore);
+                // QR events
+                let qrRetries = 0;
+                await replaceBinding("onQRChangedEvent", async (qr) => {
+                    this.emit(Events.QR_RECEIVED, qr);
+                    if (
+                        this.options.qrMaxRetries > 0 &&
+                        ++qrRetries > this.options.qrMaxRetries
+                    ) {
+                        this.emit(
+                            Events.DISCONNECTED,
+                            "Max qrcode retries reached"
+                        );
+                        await this.destroy();
+                    }
+                });
 
-                // wait for Store
-                await this.pupPage.waitForFunction(
-                    "window.Store !== undefined"
-                );
-                // set client info & interface
-                this.info = new ClientInfo(
-                    this,
-                    await this.pupPage.evaluate(() => ({
-                        ...window.Store.Conn.serialize(),
-                        wid: window.Store.User.getMeUser(),
-                    }))
-                );
-                this.interface = new InterfaceController(this);
-                await this.pupPage.evaluate(LoadUtils);
-                await this.attachEventListeners();
+                await this.pupPage.evaluate(async () => {
+                    // build QR payload
+                    const reg =
+                        await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
+                    const noise =
+                        await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
+                    const staticKey = window.AuthStore.Base64Tools.encodeB64(
+                        noise.staticKeyPair.pubKey
+                    );
+                    const identityKey = window.AuthStore.Base64Tools.encodeB64(
+                        reg.identityKeyPair.pubKey
+                    );
+                    const advSecret =
+                        await window.AuthStore.RegistrationUtils.getADVSecretKey();
+                    const plat =
+                        window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
+                    const makeQR = (ref) =>
+                        `${ref},${staticKey},${identityKey},${advSecret},${plat}`;
+
+                    // initial + future
+                    window.onQRChangedEvent(makeQR(window.AuthStore.Conn.ref));
+                    window.AuthStore.Conn.off("change:ref");
+                    window.AuthStore.Conn.on("change:ref", (_, ref) => {
+                        window.onQRChangedEvent(makeQR(ref));
+                    });
+                });
             }
 
-            this.emit(Events.READY);
-            this.authStrategy.afterAuthReady();
-        });
-
-        let lastPercent = null;
-        await replaceBinding(
-            "onOfflineProgressUpdateEvent",
-            async (percent) => {
-                if (percent !== lastPercent) {
-                    lastPercent = percent;
-                    this.emit(Events.LOADING_SCREEN, percent);
+            // always replace these three bindings
+            await replaceBinding(
+                "onAuthAppStateChangedEvent",
+                async (state) => {
+                    if (state === "UNPAIRED_IDLE") {
+                        window.Store.Cmd.refreshQR();
+                    }
                 }
-            }
-        );
+            );
 
-        await replaceBinding("onLogoutEvent", async () => {
-            this.lastLoggedOut = true;
-            await this.pupPage
-                .waitForNavigation({ waitUntil: "load", timeout: 5000 })
-                .catch(() => {});
-        });
+            await replaceBinding("onAppStateHasSyncedEvent", async () => {
+                const payload = await this.authStrategy.getAuthEventPayload();
+                this.emit(Events.AUTHENTICATED, payload);
 
-        // tear down old core listeners, then reinstall
-        await this.pupPage.evaluate(() => {
-            // remove all handlers
-            window.AuthStore.AppState.off("change:state");
-            window.AuthStore.AppState.off("change:hasSynced");
-            window.AuthStore.Cmd.off("offline_progress_update");
-            window.AuthStore.Cmd.off("logout");
+                // only inject Store/WWebJS once per session
+                const already = await this.pupPage.evaluate(
+                    () =>
+                        typeof window.Store !== "undefined" &&
+                        typeof window.WWebJS !== "undefined"
+                );
+                if (!already) {
+                    // optional local caching
+                    if (
+                        this.options.webVersionCache.type === "local" &&
+                        this.currentIndexHtml
+                    ) {
+                        const { type, ...opts } = this.options.webVersionCache;
+                        await WebCacheFactory.createWebCache(
+                            type,
+                            opts
+                        ).persist(this.currentIndexHtml, version);
+                    }
+                    await this.pupPage.evaluate(ExposeStore);
 
-            // add fresh ones
-            window.AuthStore.AppState.on("change:state", (_s, st) =>
-                window.onAuthAppStateChangedEvent(st)
+                    // wait for Store
+                    await this.pupPage.waitForFunction(
+                        "window.Store !== undefined"
+                    );
+                    // set client info & interface
+                    this.info = new ClientInfo(
+                        this,
+                        await this.pupPage.evaluate(() => ({
+                            ...window.Store.Conn.serialize(),
+                            wid: window.Store.User.getMeUser(),
+                        }))
+                    );
+                    this.interface = new InterfaceController(this);
+                    await this.pupPage.evaluate(LoadUtils);
+                    await this.attachEventListeners();
+                }
+
+                this.emit(Events.READY);
+                this.authStrategy.afterAuthReady();
+            });
+
+            let lastPercent = null;
+            await replaceBinding(
+                "onOfflineProgressUpdateEvent",
+                async (percent) => {
+                    if (percent !== lastPercent) {
+                        lastPercent = percent;
+                        this.emit(Events.LOADING_SCREEN, percent);
+                    }
+                }
             );
-            window.AuthStore.AppState.on("change:hasSynced", () =>
-                window.onAppStateHasSyncedEvent()
-            );
-            window.AuthStore.Cmd.on("offline_progress_update", () =>
-                window.onOfflineProgressUpdateEvent(
-                    window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
-                )
-            );
-            window.AuthStore.Cmd.on("logout", async () =>
-                window.onLogoutEvent()
-            );
-        });
+
+            await replaceBinding("onLogoutEvent", async () => {
+                this.lastLoggedOut = true;
+                await this.pupPage
+                    .waitForNavigation({ waitUntil: "load", timeout: 5000 })
+                    .catch(() => {});
+            });
+
+            // tear down old core listeners, then reinstall
+            await this.pupPage.evaluate(() => {
+                // remove all handlers
+                window.AuthStore.AppState.off("change:state");
+                window.AuthStore.AppState.off("change:hasSynced");
+                window.AuthStore.Cmd.off("offline_progress_update");
+                window.AuthStore.Cmd.off("logout");
+
+                // add fresh ones
+                window.AuthStore.AppState.on("change:state", (_s, st) =>
+                    window.onAuthAppStateChangedEvent(st)
+                );
+                window.AuthStore.AppState.on("change:hasSynced", () =>
+                    window.onAppStateHasSyncedEvent()
+                );
+                window.AuthStore.Cmd.on("offline_progress_update", () =>
+                    window.onOfflineProgressUpdateEvent(
+                        window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
+                    )
+                );
+                window.AuthStore.Cmd.on("logout", async () =>
+                    window.onLogoutEvent()
+                );
+            });
+        } catch (err) {
+            console.error("WWebJS: Error during injection", err);
+        } finally {
+            this.isInjecting = false;
+        }
     }
 
     async grabFirstPage(browser) {
