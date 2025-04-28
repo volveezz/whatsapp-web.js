@@ -316,6 +316,11 @@ class Client extends EventEmitter {
                         window.Store.Cmd.refreshQR();
                     }
                 }
+            ).catch((e) =>
+                console.error(
+                    "Failed to replace binding for onAuthAppStateChangedEvent",
+                    e
+                )
             );
 
             await replaceBinding("onAppStateHasSyncedEvent", async () => {
