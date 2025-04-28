@@ -135,7 +135,11 @@ class Client extends EventEmitter {
             console.warn("WWebJS: Injection already in progress, skipping");
             return;
         }
+<<<<<<< HEAD
         if (!this.pupPage || this.pupPage.isClosed()) {
+=======
+        if (!this.pupPage?.isClosed()) {
+>>>>>>> 98dd4d8f9159533529d19f98910f1fb9052e9bce
             console.warn(
                 "WWebJS: Injection attempted on closed page, skipping"
             );
