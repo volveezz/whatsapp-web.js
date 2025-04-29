@@ -147,64 +147,142 @@ class Client extends EventEmitter {
             const replaceBinding = async (name, fn) => {
                 if (!this.pupPage || this.pupPage.isClosed()) return;
 
-                // 1) clear any old global
-                await this.pupPage
-                    .evaluate((n) => {
-                        if (typeof window !== "undefined") {
-                            // Adding extra check just in case
-                            if (window.hasOwnProperty(n)) {
-                                delete window[n];
-                            }
-                        }
-                    }, name)
-                    .catch((err) =>
-                        console.warn(
-                            `WWebJS: Error deleting window[${name}]:`,
-                            err.message
-                        )
-                    );
+                const maxRetries = 3;
+                let attempt = 0;
 
-                // 2) remove any existing Puppeteer binding
-                try {
-                    if (
-                        this.pupPage._client &&
-                        this.pupPage._client.isConnected()
-                    ) {
-                        await this.pupPage._client.send(
-                            "Runtime.removeBinding",
-                            { name }
-                        );
+                while (attempt < maxRetries) {
+                    attempt++;
+                    try {
+                        // 1) Clear any old global (more robustly)
+                        await this.pupPage
+                            .evaluate((n) => {
+                                if (
+                                    typeof window !== "undefined" &&
+                                    window.hasOwnProperty(n)
+                                ) {
+                                    try {
+                                        // Attempt deletion, log if configurable is false (though unlikely here)
+                                        if (
+                                            !Object.getOwnPropertyDescriptor(
+                                                window,
+                                                n
+                                            )?.configurable
+                                        ) {
+                                            console.warn(
+                                                `WWebJS: Cannot delete non-configurable window['${n}']`
+                                            );
+                                        } else {
+                                            delete window[n];
+                                        }
+                                    } catch (e) {
+                                        console.warn(
+                                            `WWebJS: Error deleting window['${n}'] (Attempt ${attempt}):`,
+                                            e.message
+                                        );
+                                    }
+                                }
+                            }, name)
+                            .catch((err) =>
+                                console.warn(
+                                    `WWebJS: Error evaluating delete window['${name}'] (Attempt ${attempt}):`,
+                                    err.message
+                                )
+                            );
+
+                        // Add a small delay to allow browser state to potentially update
                         await new Promise((resolve) =>
-                            setTimeout(resolve, 200)
-                        );
-                    } else {
-                        console.warn(
-                            `WWebJS: Puppeteer client not connected, cannot remove binding ${name}`
-                        );
-                    }
-                } catch (err) {}
+                            setTimeout(resolve, 50 * attempt)
+                        ); // Increase delay slightly on retry
 
-                // 3) re-expose the function
-                try {
-                    if (!this.pupPage || this.pupPage.isClosed()) return;
-                    await this.pupPage.exposeFunction(name, fn);
-                } catch (exposeErr) {
-                    if (
-                        exposeErr.message.includes(
-                            `window['${name}'] already exists`
-                        )
-                    ) {
-                        console.warn(
-                            `WWebJS: exposeFunction failed for '${name}' with 'already exists'`
+                        // 2) Remove any existing Puppeteer binding
+                        try {
+                            if (
+                                this.pupPage._client &&
+                                this.pupPage._client.isConnected()
+                            ) {
+                                // Check if binding exists before trying to remove
+                                const bindings = this.pupPage._pageBindings;
+                                if (bindings && bindings.has(name)) {
+                                    await this.pupPage._client.send(
+                                        "Runtime.removeBinding",
+                                        { name }
+                                    );
+                                    // Give CDP time to process removal
+                                    await new Promise((resolve) =>
+                                        setTimeout(resolve, 100 * attempt)
+                                    );
+                                    bindings.delete(name); // Also clear puppeteer's internal map
+                                }
+                            } else {
+                                console.warn(
+                                    `WWebJS: Puppeteer client not connected, cannot remove binding ${name} (Attempt ${attempt})`
+                                );
+                            }
+                        } catch (removeErr) {
+                            console.warn(
+                                `WWebJS: Error removing binding ${name} (Attempt ${attempt}):`,
+                                removeErr.message
+                            );
+                        }
+
+                        // 2.5) Final check before exposeFunction
+                        const existsAgain = await this.pupPage.evaluate(
+                            (n) =>
+                                typeof window !== "undefined" &&
+                                window.hasOwnProperty(n),
+                            name
                         );
-                    } else {
+                        if (existsAgain) {
+                            console.warn(
+                                `WWebJS: window['${name}'] still exists before exposeFunction on attempt ${attempt}. Retrying...`
+                            );
+                            if (attempt >= maxRetries) {
+                                throw new Error(
+                                    `window['${name}'] persisted after cleanup attempts.`
+                                );
+                            }
+                            await new Promise((resolve) =>
+                                setTimeout(resolve, 200 * attempt)
+                            ); // Longer wait before next retry
+                            continue; // Go to next iteration of the while loop
+                        }
+
+                        // 3) Re-expose the function
+                        await this.pupPage.exposeFunction(name, fn);
+                        // If successful, break the loop
+                        console.log(
+                            `WWebJS: Successfully exposed function '${name}' on attempt ${attempt}.`
+                        );
+                        return; // Success
+                    } catch (exposeErr) {
                         console.error(
-                            `WWebJS: Failed to expose function ${name} with unexpected error`,
-                            exposeErr
+                            `WWebJS: exposeFunction failed for '${name}' on attempt ${attempt}:`,
+                            exposeErr.message
+                        );
+                        if (
+                            attempt >= maxRetries ||
+                            !exposeErr.message.includes(
+                                `window['${name}'] already exists`
+                            )
+                        ) {
+                            // If it's the last retry or a different error, re-throw it
+                            console.error(
+                                `WWebJS: Final attempt failed or unexpected error for '${name}'. Giving up.`
+                            );
+                        }
+                        // Wait longer before retrying if it's the 'already exists' error
+                        await new Promise((resolve) =>
+                            setTimeout(resolve, 300 * attempt)
                         );
                     }
-                    throw exposeErr;
                 }
+                // Should not be reached if successful or re-thrown
+                console.error(
+                    `WWebJS: Exceeded max retries (${maxRetries}) for exposing function '${name}'.`
+                );
+                throw new Error(
+                    `Failed to expose function ${name} after ${maxRetries} attempts.`
+                );
             };
 
             // wait until Debug.VERSION shows up
