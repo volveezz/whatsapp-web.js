@@ -196,14 +196,11 @@ class Client extends EventEmitter {
 
                         // 2) Remove any existing Puppeteer binding
                         try {
-                            if (
-                                this.pupPage._client &&
-                                this.pupPage._client.isConnected()
-                            ) {
+                            if (this.pupPage && this.pupBrowser?.connected) {
                                 // Check if binding exists before trying to remove
                                 const bindings = this.pupPage._pageBindings;
                                 if (bindings && bindings.has(name)) {
-                                    await this.pupPage._client.send(
+                                    await this.pupPage._client?.send(
                                         "Runtime.removeBinding",
                                         { name }
                                     );
@@ -223,6 +220,7 @@ class Client extends EventEmitter {
                                 `WWebJS: Error removing binding ${name} (Attempt ${attempt}):`,
                                 removeErr.message
                             );
+                            continue;
                         }
 
                         // 2.5) Final check before exposeFunction
