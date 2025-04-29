@@ -196,7 +196,11 @@ class Client extends EventEmitter {
 
                         // 2) Remove any existing Puppeteer binding
                         try {
-                            if (this.pupPage && this.pupBrowser?.connected) {
+                            if (
+                                this.pupPage &&
+                                !this.pupPage.isClosed() &&
+                                this.pupBrowser?.connected
+                            ) {
                                 // Check if binding exists before trying to remove
                                 const bindings = this.pupPage._pageBindings;
                                 if (bindings && bindings.has(name)) {
