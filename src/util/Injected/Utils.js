@@ -22,7 +22,7 @@ exports.LoadUtils = () => {
 
     window.WWebJS.sendSeen = async (chatId) => {
         let chat = window.Store.Chat.get(chatId);
-        if (chat !== undefined) {
+        if (chat) {
             await window.Store.SendSeen.sendSeen(chat, false);
             return true;
         }

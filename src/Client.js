@@ -1409,7 +1409,7 @@ class Client extends EventEmitter {
                 let result = null,
                     errInfo = null;
                 try {
-                    if (seen) await chat.sendSeen(); // optional mark-as-read
+                    if (seen) void window.Store.SendSeen.sendSeen(chat, false); // optional mark-as-read
                     const m = await window.WWebJS.sendMessage(chat, body, opts);
                     result = window.WWebJS.getMessageModel(m);
                 } catch (e) {
