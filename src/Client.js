@@ -1326,13 +1326,13 @@ class Client extends EventEmitter {
     /**
      * Send a message to a specific chatId.
      *
-     * @param  {string}                          chatId
-     * @param  {string|MessageMedia|Location|Poll|Contact|Array<Contact>|Buttons|List} content
-     * @param  {MessageSendOptions & {preparedMedia?: Object}} [options]
+     * @param  {string} chatId
+     * @param  {string | MessageMedia | {mediaKey:string} | Location | Poll | Contact | Array<Contact> | Buttons | List} content
+     * @param  {MessageSendOptions & { preparedMedia?: Object }} [options]
      * @returns {Promise<Message>}
      */
     async sendMessage(chatId, content, options = {}) {
-        /* ---------- build base options object ---------- */
+        /* ---------- base options ---------- */
         const internalOptions = {
             linkPreview: options.linkPreview === false ? undefined : true,
             sendAudioAsVoice: options.sendAudioAsVoice,
@@ -1346,32 +1346,24 @@ class Client extends EventEmitter {
                 ? options.mentions.map((c) => (c?.id ? c.id._serialized : c))
                 : [],
             extraOptions: options.extra,
-            preparedMedia: options.preparedMedia, // <--- NEW
+            preparedMedia: options.preparedMedia,
         };
 
-        /* ---------- deprecation warnings ---------- */
-        if (options.gifPlayback !== undefined) {
-            internalOptions.sendVideoAsGif = options.gifPlayback;
-            console.warn(
-                'WARNING: The "gifPlayback" option is deprecated. Please use "sendVideoAsGif" instead.'
-            );
-        }
-        if (options.mentions?.some((m) => m.id)) {
-            console.warn(
-                "Mentions with an array of Contact are now deprecated. See more at https://github.com/pedroslopez/whatsapp-web.js/pull/2166."
-            );
-            options.mentions = options.mentions.map((a) => a.id._serialized);
+        /* ---------- prepared media passed as 2-nd arg ---------- */
+        const isPreparedMedia =
+            content && typeof content === "object" && content.mediaKey;
+
+        if (isPreparedMedia) {
+            if (options.caption) content.caption = options.caption;
+            internalOptions.preparedMedia = undefined;
         }
 
-        /* ---------- input-type routing ---------- */
-        if (options.preparedMedia) {
-            // already-processed media – nothing more to do on the Node side
-            content = content || ""; // keep body empty unless user supplied text
-        } else if (content instanceof MessageMedia) {
+        /* ---------- other input-types ---------- */
+        if (!isPreparedMedia && content instanceof MessageMedia) {
             internalOptions.attachment = content;
             internalOptions.isViewOnce = options.isViewOnce;
             content = "";
-        } else if (options.media instanceof MessageMedia) {
+        } else if (!isPreparedMedia && options.media instanceof MessageMedia) {
             internalOptions.attachment = options.media;
             internalOptions.caption = content;
             internalOptions.isViewOnce = options.isViewOnce;
@@ -1404,6 +1396,7 @@ class Client extends EventEmitter {
         if (
             internalOptions.sendMediaAsSticker &&
             internalOptions.attachment &&
+            !isPreparedMedia &&
             !internalOptions.preparedMedia
         ) {
             internalOptions.attachment = await Util.formatToWebpSticker(
@@ -1417,34 +1410,33 @@ class Client extends EventEmitter {
             );
         }
 
-        /* ---------- sendSeen flag ---------- */
+        /* ---------- mark-as-seen flag ---------- */
         const sendSeen =
             options.sendSeen === undefined ? true : options.sendSeen;
 
-        /* ---------- hand off to the in-page helper ---------- */
+        /* ---------- hand off to in-page helper ---------- */
         const { message: newMessage, error } = await this.pupPage.evaluate(
             async (chatId, body, opts, seen) => {
                 const chatWid = window.Store.WidFactory.createWid(chatId);
-                const chat = await window.Store.Chat.find(chatWid);
-
+                const chat = window.Store.Chat.find(chatWid);
                 if (!chat) throw new Error("Chat not found");
 
-                let result = null,
-                    errInfo = null;
+                if (seen) void window.Store.SendSeen.sendSeen(chat, false);
+
                 try {
-                    if (seen) void window.Store.SendSeen.sendSeen(chat, false); // optional mark-as-read
                     const m = await window.WWebJS.sendMessage(chat, body, opts);
-                    result = window.WWebJS.getMessageModel(m);
+                    return { message: window.WWebJS.getMessageModel(m) };
                 } catch (e) {
-                    errInfo = {
-                        name: e.name,
-                        message: e.message,
-                        stack: e.stack,
-                        code: e.code,
-                        chatId: chatWid,
+                    return {
+                        error: {
+                            name: e.name,
+                            message: e.message,
+                            stack: e.stack,
+                            code: e.code,
+                            chatId: chatWid,
+                        },
                     };
                 }
-                return { message: result, error: errInfo };
             },
             chatId,
             content,
@@ -1453,11 +1445,7 @@ class Client extends EventEmitter {
         );
 
         if (error) {
-            console.error(
-                `Failed to send message to ${error.chatId}:`,
-                error.message,
-                `(code=${error.code})`
-            );
+            console.error(`Failed to send message to`, chatId, error);
             throw new SendMessageError(error);
         }
 
