@@ -491,6 +491,29 @@ class Client extends EventEmitter {
             await this.attachEventListeners();
         }
 
+        // Auto-disable media auto-download flags on client start
+        const disableAutoDownloadFlags = async () => {
+            try {
+                await this.setAutoDownloadAudio(false);
+                await this.setAutoDownloadDocuments(false);
+                await this.setAutoDownloadPhotos(false);
+                await this.setAutoDownloadVideos(false);
+            } catch (err) {
+                console.warn(
+                    "[WWebJS] Failed to auto-disable auto-download flags:",
+                    err?.message || err
+                );
+            }
+        };
+
+        // If the session is already up we can disable immediately,
+        // otherwise wait for the READY event which signals a successful login.
+        if (isAlreadyInitialized) {
+            await disableAutoDownloadFlags();
+        } else {
+            this.once(Events.READY, disableAutoDownloadFlags);
+        }
+
         this.pupPage.on("framenavigated", async (frame) => {
             if (frame.url().includes("post_logout=1") || this.lastLoggedOut) {
                 this.emit(Events.DISCONNECTED, "LOGOUT");
@@ -2343,6 +2366,7 @@ class Client extends EventEmitter {
     async setAutoDownloadAudio(flag) {
         await this.pupPage.evaluate(async (flag) => {
             const autoDownload = window.Store.Settings.getAutoDownloadAudio();
+            console.debug("Auto download audio", autoDownload, flag);
             if (autoDownload === flag) {
                 return flag;
             }
@@ -2359,6 +2383,7 @@ class Client extends EventEmitter {
         await this.pupPage.evaluate(async (flag) => {
             const autoDownload =
                 window.Store.Settings.getAutoDownloadDocuments();
+            console.debug("Auto download documents", autoDownload, flag);
             if (autoDownload === flag) {
                 return flag;
             }
@@ -2374,6 +2399,7 @@ class Client extends EventEmitter {
     async setAutoDownloadPhotos(flag) {
         await this.pupPage.evaluate(async (flag) => {
             const autoDownload = window.Store.Settings.getAutoDownloadPhotos();
+            console.debug("Auto download photos", autoDownload, flag);
             if (autoDownload === flag) {
                 return flag;
             }
@@ -2389,6 +2415,7 @@ class Client extends EventEmitter {
     async setAutoDownloadVideos(flag) {
         await this.pupPage.evaluate(async (flag) => {
             const autoDownload = window.Store.Settings.getAutoDownloadVideos();
+            console.debug("Auto download videos", autoDownload, flag);
             if (autoDownload === flag) {
                 return flag;
             }
