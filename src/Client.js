@@ -143,152 +143,8 @@ class Client extends EventEmitter {
         this.isInjecting = true;
 
         try {
-            // helper to always replace a page binding
-            // const replaceBinding = async (name, fn) => {
-            //     if (!this.pupPage || this.pupPage.isClosed()) return;
-
-            //     const maxRetries = 3;
-            //     let attempt = 0;
-
-            //     while (attempt < maxRetries) {
-            //         attempt++;
-            //         try {
-            //             // 1) Clear any old global (more robustly)
-            //             await this.pupPage
-            //                 .evaluate((n) => {
-            //                     if (
-            //                         typeof window !== "undefined" &&
-            //                         window.hasOwnProperty(n)
-            //                     ) {
-            //                         try {
-            //                             // Attempt deletion, log if configurable is false (though unlikely here)
-            //                             if (
-            //                                 !Object.getOwnPropertyDescriptor(
-            //                                     window,
-            //                                     n
-            //                                 )?.configurable
-            //                             ) {
-            //                                 console.warn(
-            //                                     `WWebJS: Cannot delete non-configurable window['${n}']`
-            //                                 );
-            //                             } else {
-            //                                 delete window[n];
-            //                             }
-            //                         } catch (e) {
-            //                             console.warn(
-            //                                 `WWebJS: Error deleting window['${n}'] (Attempt ${attempt}):`,
-            //                                 e.message
-            //                             );
-            //                         }
-            //                     }
-            //                 }, name)
-            //                 .catch((err) =>
-            //                     console.warn(
-            //                         `WWebJS: Error evaluating delete window['${name}'] (Attempt ${attempt}):`,
-            //                         err.message
-            //                     )
-            //                 );
-
-            //             // Add a small delay to allow browser state to potentially update
-            //             await new Promise((resolve) =>
-            //                 setTimeout(resolve, 50 * attempt)
-            //             ); // Increase delay slightly on retry
-
-            //             // 2) Remove any existing Puppeteer binding
-            //             try {
-            //                 if (
-            //                     this.pupPage &&
-            //                     !this.pupPage.isClosed() &&
-            //                     this.pupBrowser?.connected
-            //                 ) {
-            //                     // Check if binding exists before trying to remove
-            //                     const bindings = this.pupPage._pageBindings;
-            //                     if (bindings && bindings.has(name)) {
-            //                         await this.pupPage._client?.send(
-            //                             "Runtime.removeBinding",
-            //                             { name }
-            //                         );
-            //                         // Give CDP time to process removal
-            //                         await new Promise((resolve) =>
-            //                             setTimeout(resolve, 100 * attempt)
-            //                         );
-            //                         bindings.delete(name); // Also clear puppeteer's internal map
-            //                     }
-            //                 } else {
-            //                     console.warn(
-            //                         `WWebJS: Puppeteer client not connected, cannot remove binding ${name} (Attempt ${attempt})`
-            //                     );
-            //                 }
-            //             } catch (removeErr) {
-            //                 console.warn(
-            //                     `WWebJS: Error removing binding ${name} (Attempt ${attempt}):`,
-            //                     removeErr.message
-            //                 );
-            //                 continue;
-            //             }
-
-            //             // 2.5) Final check before exposeFunction
-            //             const existsAgain = await this.pupPage.evaluate(
-            //                 (n) =>
-            //                     typeof window !== "undefined" &&
-            //                     window.hasOwnProperty(n),
-            //                 name
-            //             );
-            //             if (existsAgain) {
-            //                 console.warn(
-            //                     `WWebJS: window['${name}'] still exists before exposeFunction on attempt ${attempt}. Retrying...`
-            //                 );
-            //                 if (attempt >= maxRetries) {
-            //                     throw new Error(
-            //                         `window['${name}'] persisted after cleanup attempts.`
-            //                     );
-            //                 }
-            //                 await new Promise((resolve) =>
-            //                     setTimeout(resolve, 200 * attempt)
-            //                 ); // Longer wait before next retry
-            //                 continue; // Go to next iteration of the while loop
-            //             }
-
-            //             // 3) Re-expose the function
-            //             await this.pupPage.exposeFunction(name, fn);
-            //             // If successful, break the loop
-            //             console.log(
-            //                 `WWebJS: Successfully exposed function '${name}' on attempt ${attempt}.`
-            //             );
-            //             return; // Success
-            //         } catch (exposeErr) {
-            //             console.error(
-            //                 `WWebJS: exposeFunction failed for '${name}' on attempt ${attempt}:`,
-            //                 exposeErr.message
-            //             );
-            //             if (
-            //                 attempt >= maxRetries ||
-            //                 !exposeErr.message.includes(
-            //                     `window['${name}'] already exists`
-            //                 )
-            //             ) {
-            //                 // If it's the last retry or a different error, re-throw it
-            //                 console.error(
-            //                     `WWebJS: Final attempt failed or unexpected error for '${name}'. Giving up.`
-            //                 );
-            //             }
-            //             // Wait longer before retrying if it's the 'already exists' error
-            //             await new Promise((resolve) =>
-            //                 setTimeout(resolve, 300 * attempt)
-            //             );
-            //         }
-            //     }
-            //     // Should not be reached if successful or re-thrown
-            //     console.error(
-            //         `WWebJS: Exceeded max retries (${maxRetries}) for exposing function '${name}'.`
-            //     );
-            //     throw new Error(
-            //         `Failed to expose function ${name} after ${maxRetries} attempts.`
-            //     );
-            // };
-
             const replaceBinding = async (name, fn) => {
-                const page = this.pupPage; // Get the page object
+                const page = this.pupPage;
 
                 if (!page || page.isClosed()) {
                     console.warn(
@@ -297,7 +153,7 @@ class Client extends EventEmitter {
                     return;
                 }
 
-                // 1. Attempt to remove the existing binding using the official method
+                // 1. Attempt to remove the existing binding
                 try {
                     console.log(
                         `WWebJS replaceBinding: Attempting removeExposedFunction for '${name}'...`
@@ -521,15 +377,10 @@ class Client extends EventEmitter {
                     .catch(() => {});
             });
 
-            // tear down old core listeners, then reinstall
+            // sub to WA events
             await this.pupPage.evaluate(() => {
-                // remove all handlers
-                window.AuthStore.AppState.off("change:state");
-                window.AuthStore.AppState.off("change:hasSynced");
-                window.AuthStore.Cmd.off("offline_progress_update");
-                window.AuthStore.Cmd.off("logout");
+                if (window.__waEventSubsInjected) return;
 
-                // add fresh ones
                 window.AuthStore.AppState.on("change:state", (_s, st) =>
                     window.onAuthAppStateChangedEvent(st)
                 );
@@ -544,6 +395,8 @@ class Client extends EventEmitter {
                 window.AuthStore.Cmd.on("logout", async () =>
                     window.onLogoutEvent()
                 );
+
+                window.__waEventSubsInjected = true;
             });
         } catch (err) {
             console.error("WWebJS: Error during injection", err);
@@ -1586,6 +1439,61 @@ class Client extends EventEmitter {
         return new Message(this, newMessage);
     }
 
+    async prepareMedia(filePath, uniqueId) {
+        const inputId = `wwebjs-upload-${uniqueId}`;
+
+        await this.pupPage.evaluate((id) => {
+            const input = document.createElement("input");
+            input.type = "file";
+            input.id = id;
+            input.style.display = "none";
+            document.body.appendChild(input);
+        }, inputId);
+
+        const input = await this.pupPage.$(`#${inputId}`);
+        await input.uploadFile(filePath);
+
+        await this.pupPage.evaluate(async (id) => {
+            const file = document.getElementById(id).files[0];
+
+            try {
+                const data = await window.WWebJS.processMediaData(file, {});
+                if (!window.WWebJS.preparedMediaMap)
+                    window.WWebJS.preparedMediaMap = {};
+                window.WWebJS.preparedMediaMap[id] = data;
+            } finally {
+                document.getElementById(id)?.remove();
+            }
+        }, inputId);
+    }
+
+    async sendPreparedMedia(chatId, uniqueId) {
+        const message = await this.pupPage.evaluate(
+            async (chatId, key) => {
+                const chat = window.Store.Chat.get(chatId);
+                const mediaData = window.WWebJS.preparedMediaMap?.[key];
+
+                if (!mediaData) {
+                    console.error(
+                        "Weren't able to get media from cache by Id:",
+                        key
+                    );
+                    return;
+                }
+
+                const msg = await window.WWebJS.sendRawMediaMessage(
+                    chat,
+                    mediaData
+                );
+                return window.WWebJS.getMessageModel(msg);
+            },
+            chatId,
+            `wwebjs-upload-${uniqueId}`
+        );
+
+        return new Message(this, message);
+    }
+
     /**
      * React to a message with an emoji
      * @param {string} reaction - Emoji to react with. Send an empty string to remove the reaction.
@@ -2001,16 +1909,15 @@ class Client extends EventEmitter {
      * @returns {Promise<Object|null>}
      */
     async getNumberId(number) {
-        if (!number.endsWith("@c.us")) {
-            number += "@c.us";
-        }
-
-        return await this.pupPage.evaluate(async (number) => {
-            const wid = window.Store.WidFactory.createWid(number);
-            const result = await window.Store.QueryExist(wid);
-            if (!result || result.wid === undefined) return null;
-            return result.wid;
-        }, number);
+        return await this.pupPage.evaluate(
+            async (number) => {
+                const wid = window.Store.WidFactory.createWid(number);
+                const result = await window.Store.QueryExist(wid);
+                if (!result || result.wid === undefined) return null;
+                return result.wid;
+            },
+            number.endsWith("@c.us") ? number : `${number}@c.us`
+        );
     }
 
     /**
@@ -2035,7 +1942,10 @@ class Client extends EventEmitter {
      * @returns {Promise<string>}
      */
     async getCountryCode(number) {
-        number = number.replace(" ", "").replace("+", "").replace("@c.us", "");
+        number = number
+            .replace(/\s+/g, "")
+            .replace(/\+/g, "")
+            .replace("@c.us", "");
 
         return await this.pupPage.evaluate(async (numberId) => {
             return window.Store.NumberInfo.findCC(numberId);
@@ -2498,7 +2408,7 @@ class Client extends EventEmitter {
     }
 
     /**
-     * Setting  autoload download videos
+     * Setting autoload download videos
      * @param {boolean} flag true/false
      */
     async setAutoDownloadVideos(flag) {
@@ -2629,10 +2539,7 @@ class Client extends EventEmitter {
                     return originalAddHandler.call(this, event, handler);
                 };
             } catch (err) {
-                console.error(
-                    "[reinitializeCryptoStore] Failed to initialize CryptoLib:",
-                    err
-                );
+                throw new Error("Failed to initialize CryptoLib");
             }
         });
     }
