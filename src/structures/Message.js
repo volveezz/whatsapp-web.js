@@ -512,43 +512,80 @@ class Message extends Base {
      */
     async downloadMedia() {
         if (!this.hasMedia) {
-            return undefined;
+            console.error(
+                "[DownloadMedia] Tried to download media from message without it"
+            );
+            return null;
         }
 
         const result = await this.client.pupPage.evaluate(async (msgId) => {
-            const msg =
-                window.Store.Msg.get(msgId) ||
-                (await window.Store.Msg.getMessagesById([msgId]))
-                    ?.messages?.[0];
-            if (!msg || !msg.mediaData) {
-                return null;
-            }
+            const logs = [];
+            const status = { ok: true };
 
-            if (!msg.mediaData.mediaStage) {
-                console.error(
-                    "[WAWEBJS] Media stage not found for message",
-                    msg
+            function log(...args) {
+                logs.push(
+                    args
+                        .map((a) => {
+                            if (typeof a === "object") {
+                                try {
+                                    return JSON.stringify(a);
+                                } catch {
+                                    return "[Circular]";
+                                }
+                            }
+                            return String(a);
+                        })
+                        .join(" ")
                 );
-                return undefined;
-            }
-
-            if (msg.mediaData.mediaStage != "RESOLVED") {
-                // try to resolve media
-                await msg.downloadMedia({
-                    downloadEvenIfExpensive: true,
-                    rmrReason: 1,
-                });
-            }
-
-            if (
-                msg.mediaData.mediaStage.includes("ERROR") ||
-                msg.mediaData.mediaStage === "FETCHING"
-            ) {
-                // media could not be downloaded
-                return undefined;
             }
 
             try {
+                const msg =
+                    window.Store.Msg.get(msgId) ||
+                    (await window.Store.Msg.getMessagesById([msgId]))
+                        ?.messages?.[0];
+
+                if (!msg?.mediaData?.mediaStage) {
+                    log("[WAWEBJS] No media data found");
+                    status.ok = false;
+                    return { status, logs };
+                }
+
+                if (msg.mediaData.mediaStage !== "RESOLVED") {
+                    await msg.downloadMedia({
+                        downloadEvenIfExpensive: true,
+                        rmrReason: 1,
+                    });
+
+                    // Wait for the mediaData to be updated
+                    let tries = 0;
+                    while (
+                        msg.mediaData.mediaStage !== "RESOLVED" &&
+                        !msg.mediaData.mediaStage.includes("ERROR") &&
+                        tries++ < 10
+                    ) {
+                        await new Promise((res) => setTimeout(res, 300));
+                    }
+
+                    if (msg.mediaData.mediaStage !== "RESOLVED") {
+                        log(
+                            `mediaStage still not RESOLVED after retries: ${msg.mediaData.mediaStage}`
+                        );
+                        return { logs };
+                    }
+                }
+
+                if (
+                    msg.mediaData.mediaStage.includes("ERROR") ||
+                    msg.mediaData.mediaStage === "FETCHING"
+                ) {
+                    log(
+                        `[WAWEBJS] Media stage not ready: ${msg.mediaData.mediaStage}`
+                    );
+                    status.ok = false;
+                    return { status, logs };
+                }
+
                 const decryptedMedia =
                     await window.Store.DownloadManager.downloadAndMaybeDecrypt({
                         directPath: msg.directPath,
@@ -557,7 +594,7 @@ class Message extends Base {
                         mediaKey: msg.mediaKey,
                         mediaKeyTimestamp: msg.mediaKeyTimestamp,
                         type: msg.type,
-                        signal: new AbortController().signal,
+                        signal: AbortSignal.timeout(60_000),
                     });
 
                 const data = await window.WWebJS.arrayBufferToBase64Async(
@@ -565,18 +602,37 @@ class Message extends Base {
                 );
 
                 return {
+                    status,
                     data,
                     mimetype: msg.mimetype,
                     filename: msg.filename,
                     filesize: msg.size,
                 };
             } catch (e) {
-                if (e.status && e.status === 404) return undefined;
-                throw e;
+                log(
+                    "[WAWEBJS] Exception during media download:",
+                    e.message || e.toString()
+                );
+                status.ok = false;
+                return { status, logs };
             }
         }, this.id._serialized);
 
-        if (!result) return undefined;
+        // Only log when things go wrong
+        if (!result?.status?.ok || !result.data) {
+            console.error("[DownloadMedia] Failed to download media");
+            if (result?.logs?.length) {
+                for (const line of result.logs) {
+                    console.error(`[PuppeteerLog] ${line}`);
+                }
+            } else {
+                console.error(
+                    "[DownloadMedia] No logs returned from browser context"
+                );
+            }
+            return undefined;
+        }
+
         return new MessageMedia(
             result.mimetype,
             result.data,

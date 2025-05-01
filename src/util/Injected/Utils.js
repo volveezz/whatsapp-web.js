@@ -29,9 +29,358 @@ exports.LoadUtils = () => {
         return false;
     };
 
+    // window.WWebJS.sendRawMediaMessage = async (
+    //     chat,
+    //     mediaData,
+    //     options = {}
+    // ) => {
+    //     if (!chat) throw new Error("Missing chat");
+    //     if (!mediaData || !mediaData.mediaKey)
+    //         throw new Error("Invalid mediaData");
+
+    //     const meUser = window.Store.User.getMaybeMeUser();
+    //     const newId = await window.Store.MsgKey.newId();
+
+    //     const msgId = new window.Store.MsgKey({
+    //         from: meUser,
+    //         to: chat.id,
+    //         id: newId,
+    //         selfDir: "out",
+    //         participant: chat.id.isGroup() ? meUser : undefined,
+    //     });
+
+    //     const msg = {
+    //         id: msgId,
+    //         ack: 0,
+    //         from: meUser,
+    //         to: chat.id,
+    //         local: true,
+    //         self: "out",
+    //         t: Math.floor(Date.now() / 1000),
+    //         isNewMsg: true,
+    //         type: mediaData.type,
+    //         mediaKey: mediaData.mediaKey,
+    //         mediaKeyTimestamp: mediaData.mediaKeyTimestamp,
+    //         mimetype: mediaData.mimetype,
+    //         filehash: mediaData.filehash,
+    //         encFilehash: mediaData.encFilehash,
+    //         directPath: mediaData.directPath,
+    //         mediaKeyFromProtobuf: true,
+    //         clientUrl: mediaData.clientUrl,
+    //         size: mediaData.size,
+    //         uploadhash: mediaData.uploadhash,
+    //         ...(mediaData.waveform ? { waveform: mediaData.waveform } : {}),
+    //         ...(mediaData.isGif ? { isGif: true } : {}),
+    //         ...(mediaData.isViewOnce ? { isViewOnce: true } : {}),
+    //         ...(mediaData.caption ? { caption: mediaData.caption } : {}),
+    //         ...(mediaData.width ? { width: mediaData.width } : {}),
+    //         ...(mediaData.height ? { height: mediaData.height } : {}),
+    //         ...(mediaData.duration ? { duration: mediaData.duration } : {}),
+    //         ...(mediaData.mediaName ? { mediaName: mediaData.mediaName } : {}),
+    //         ...(options.extra || {}),
+    //     };
+
+    //     await window.Store.SendMessage.addAndSendMsgToChat(chat, msg);
+    //     return window.Store.Msg.get(msgId._serialized);
+    // };
+
+    // window.WWebJS.sendMessage = async (chat, content, options = {}) => {
+    //     let attOptions = {};
+    //     if (options.attachment) {
+    //         attOptions = options.sendMediaAsSticker
+    //             ? await window.WWebJS.processStickerData(options.attachment)
+    //             : await window.WWebJS.processMediaData(options.attachment, {
+    //                   forceVoice: options.sendAudioAsVoice,
+    //                   forceDocument: options.sendMediaAsDocument,
+    //                   forceGif: options.sendVideoAsGif,
+    //               });
+
+    //         attOptions.caption = options.caption;
+    //         content = options.sendMediaAsSticker
+    //             ? undefined
+    //             : attOptions.preview;
+    //         attOptions.isViewOnce = options.isViewOnce;
+
+    //         delete options.attachment;
+    //         delete options.sendMediaAsSticker;
+    //     }
+    //     let quotedMsgOptions = {};
+    //     if (options.quotedMessageId) {
+    //         let quotedMessage = await window.Store.Msg.getMessagesById([
+    //             options.quotedMessageId,
+    //         ]);
+
+    //         if (quotedMessage["messages"].length != 1) {
+    //             throw new Error("Could not get the quoted message.");
+    //         }
+
+    //         quotedMessage = quotedMessage["messages"][0];
+
+    //         // TODO remove .canReply() once all clients are updated to >= v2.2241.6
+    //         const canReply = window.Store.ReplyUtils
+    //             ? window.Store.ReplyUtils.canReplyMsg(quotedMessage.unsafe())
+    //             : quotedMessage.canReply();
+
+    //         if (canReply) {
+    //             quotedMsgOptions = quotedMessage.msgContextInfo(chat);
+    //         }
+    //         delete options.quotedMessageId;
+    //     }
+
+    //     if (options.mentionedJidList) {
+    //         options.mentionedJidList = await Promise.all(
+    //             options.mentionedJidList.map(async (id) => {
+    //                 const wid = window.Store.WidFactory.createWid(id);
+    //                 if (await window.Store.QueryExist(wid)) {
+    //                     return wid;
+    //                 }
+    //             })
+    //         );
+    //         options.mentionedJidList = options.mentionedJidList.filter(Boolean);
+    //     }
+
+    //     if (options.groupMentions) {
+    //         options.groupMentions = options.groupMentions.map((e) => ({
+    //             groupSubject: e.subject,
+    //             groupJid: window.Store.WidFactory.createWid(e.id),
+    //         }));
+    //     }
+
+    //     let locationOptions = {};
+    //     if (options.location) {
+    //         let { latitude, longitude, description, url } = options.location;
+    //         url = window.Store.Validators.findLink(url)?.href;
+    //         url && !description && (description = url);
+    //         locationOptions = {
+    //             type: "location",
+    //             loc: description,
+    //             lat: latitude,
+    //             lng: longitude,
+    //             clientUrl: url,
+    //         };
+    //         delete options.location;
+    //     }
+
+    //     let _pollOptions = {};
+    //     if (options.poll) {
+    //         const { pollName, pollOptions } = options.poll;
+    //         const { allowMultipleAnswers, messageSecret } =
+    //             options.poll.options;
+    //         _pollOptions = {
+    //             type: "poll_creation",
+    //             pollName: pollName,
+    //             pollOptions: pollOptions,
+    //             pollSelectableOptionsCount: allowMultipleAnswers ? 0 : 1,
+    //             messageSecret:
+    //                 Array.isArray(messageSecret) && messageSecret.length === 32
+    //                     ? new Uint8Array(messageSecret)
+    //                     : window.crypto.getRandomValues(new Uint8Array(32)),
+    //         };
+    //         delete options.poll;
+    //     }
+
+    //     let vcardOptions = {};
+    //     if (options.contactCard) {
+    //         let contact = window.Store.Contact.get(options.contactCard);
+    //         vcardOptions = {
+    //             body: window.Store.VCard.vcardFromContactModel(contact).vcard,
+    //             type: "vcard",
+    //             vcardFormattedName: contact.formattedName,
+    //         };
+    //         delete options.contactCard;
+    //     } else if (options.contactCardList) {
+    //         let contacts = options.contactCardList.map((c) =>
+    //             window.Store.Contact.get(c)
+    //         );
+    //         let vcards = contacts.map((c) =>
+    //             window.Store.VCard.vcardFromContactModel(c)
+    //         );
+    //         vcardOptions = {
+    //             type: "multi_vcard",
+    //             vcardList: vcards,
+    //             body: undefined,
+    //         };
+    //         delete options.contactCardList;
+    //     } else if (
+    //         options.parseVCards &&
+    //         typeof content === "string" &&
+    //         content.startsWith("BEGIN:VCARD")
+    //     ) {
+    //         delete options.parseVCards;
+    //         try {
+    //             const parsed = window.Store.VCard.parseVcard(content);
+    //             if (parsed) {
+    //                 vcardOptions = {
+    //                     type: "vcard",
+    //                     vcardFormattedName:
+    //                         window.Store.VCard.vcardGetNameFromParsed(parsed),
+    //                 };
+    //             }
+    //         } catch (_) {
+    //             // not a vcard
+    //         }
+    //     }
+
+    //     if (options.linkPreview) {
+    //         delete options.linkPreview;
+    //         const link = window.Store.Validators.findLink(content);
+    //         if (link) {
+    //             let preview = await window.Store.LinkPreview.getLinkPreview(
+    //                 link
+    //             );
+    //             if (preview && preview.data) {
+    //                 preview = preview.data;
+    //                 preview.preview = true;
+    //                 preview.subtype = "url";
+    //                 options = { ...options, ...preview };
+    //             }
+    //         }
+    //     }
+
+    //     let buttonOptions = {};
+    //     if (options.buttons) {
+    //         let caption;
+    //         if (options.buttons.type === "chat") {
+    //             content = options.buttons.body;
+    //             caption = content;
+    //         } else {
+    //             caption = options.caption ? options.caption : " "; //Caption can't be empty
+    //         }
+    //         buttonOptions = {
+    //             productHeaderImageRejected: false,
+    //             isFromTemplate: false,
+    //             isDynamicReplyButtonsMsg: true,
+    //             title: options.buttons.title
+    //                 ? options.buttons.title
+    //                 : undefined,
+    //             footer: options.buttons.footer
+    //                 ? options.buttons.footer
+    //                 : undefined,
+    //             dynamicReplyButtons: options.buttons.buttons,
+    //             replyButtons: options.buttons.buttons,
+    //             caption: caption,
+    //         };
+    //         delete options.buttons;
+    //     }
+
+    //     let listOptions = {};
+    //     if (options.list) {
+    //         if (
+    //             window.Store.Conn.platform === "smba" ||
+    //             window.Store.Conn.platform === "smbi"
+    //         ) {
+    //             throw "[LT01] Whatsapp business can't send this yet";
+    //         }
+    //         listOptions = {
+    //             type: "list",
+    //             footer: options.list.footer,
+    //             list: {
+    //                 ...options.list,
+    //                 listType: 1,
+    //             },
+    //             body: options.list.description,
+    //         };
+    //         delete options.list;
+    //         delete listOptions.list.footer;
+    //     }
+
+    //     const botOptions = {};
+    //     if (options.invokedBotWid) {
+    //         botOptions.messageSecret = window.crypto.getRandomValues(
+    //             new Uint8Array(32)
+    //         );
+    //         botOptions.botMessageSecret =
+    //             await window.Store.BotSecret.genBotMsgSecretFromMsgSecret(
+    //                 botOptions.messageSecret
+    //             );
+    //         botOptions.invokedBotWid = window.Store.WidFactory.createWid(
+    //             options.invokedBotWid
+    //         );
+    //         botOptions.botPersonaId =
+    //             window.Store.BotProfiles.BotProfileCollection.get(
+    //                 options.invokedBotWid
+    //             ).personaId;
+    //         delete options.invokedBotWid;
+    //     }
+
+    //     const meUser = window.Store.User.getMaybeMeUser();
+    //     const newId = await window.Store.MsgKey.newId();
+
+    //     const newMsgId = new window.Store.MsgKey({
+    //         from: meUser,
+    //         to: chat.id,
+    //         id: newId,
+    //         participant: chat.id.isGroup() ? meUser : undefined,
+    //         selfDir: "out",
+    //     });
+
+    //     const extraOptions = options.extraOptions || {};
+    //     delete options.extraOptions;
+
+    //     const ephemeralFields =
+    //         window.Store.EphemeralFields.getEphemeralFields(chat);
+
+    //     const message = {
+    //         ...options,
+    //         id: newMsgId,
+    //         ack: 0,
+    //         body: content,
+    //         from: meUser,
+    //         to: chat.id,
+    //         local: true,
+    //         self: "out",
+    //         t: parseInt(new Date().getTime() / 1000),
+    //         isNewMsg: true,
+    //         type: "chat",
+    //         ...ephemeralFields,
+    //         ...locationOptions,
+    //         ..._pollOptions,
+    //         ...attOptions,
+    //         ...(attOptions.toJSON ? attOptions.toJSON() : {}),
+    //         ...quotedMsgOptions,
+    //         ...vcardOptions,
+    //         ...buttonOptions,
+    //         ...listOptions,
+    //         ...botOptions,
+    //         ...extraOptions,
+    //     };
+
+    //     // Bot's won't reply if canonicalUrl is set (linking)
+    //     if (botOptions) {
+    //         delete message.canonicalUrl;
+    //     }
+
+    //     await window.Store.SendMessage.addAndSendMsgToChat(chat, message);
+    //     return window.Store.Msg.get(newMsgId._serialized);
+    // };
+
+    /**
+     * Send a message (text or already-prepared media) to a chat
+     *
+     * @param {Store.Chat|Wid|string} chat  – target chat
+     * @param {string|undefined}       body – text body (omit / null for pure media)
+     * @param {Object}                 opts – the usual options
+     *        └─ opts.preparedMedia {Object}  ← output of processMediaData / processStickerData
+     */
     window.WWebJS.sendMessage = async (chat, content, options = {}) => {
+        if (!chat) throw new Error("Missing chat");
+
+        /* ---------- media handling (prepared or raw) ---------- */
         let attOptions = {};
-        if (options.attachment) {
+
+        if (options.preparedMedia) {
+            const m = options.preparedMedia;
+            if (!m.mediaKey) throw new Error("Invalid preparedMedia");
+
+            attOptions = { ...m };
+            attOptions.caption = options.caption; // allow override
+            attOptions.isViewOnce = options.isViewOnce;
+            content = m.preview ?? content;
+
+            delete options.preparedMedia;
+            delete options.caption;
+            delete options.isViewOnce;
+        } else if (options.attachment) {
             attOptions = options.sendMediaAsSticker
                 ? await window.WWebJS.processStickerData(options.attachment)
                 : await window.WWebJS.processMediaData(options.attachment, {
@@ -41,47 +390,47 @@ exports.LoadUtils = () => {
                   });
 
             attOptions.caption = options.caption;
+            attOptions.isViewOnce = options.isViewOnce;
             content = options.sendMediaAsSticker
                 ? undefined
                 : attOptions.preview;
-            attOptions.isViewOnce = options.isViewOnce;
 
             delete options.attachment;
             delete options.sendMediaAsSticker;
+            delete options.caption;
+            delete options.isViewOnce;
         }
+
+        /* ---------- quoted message ---------- */
         let quotedMsgOptions = {};
         if (options.quotedMessageId) {
             let quotedMessage = await window.Store.Msg.getMessagesById([
                 options.quotedMessageId,
             ]);
-
-            if (quotedMessage["messages"].length != 1) {
+            if (quotedMessage["messages"].length !== 1)
                 throw new Error("Could not get the quoted message.");
-            }
 
             quotedMessage = quotedMessage["messages"][0];
-
-            // TODO remove .canReply() once all clients are updated to >= v2.2241.6
             const canReply = window.Store.ReplyUtils
                 ? window.Store.ReplyUtils.canReplyMsg(quotedMessage.unsafe())
                 : quotedMessage.canReply();
 
-            if (canReply) {
-                quotedMsgOptions = quotedMessage.msgContextInfo(chat);
-            }
+            if (canReply) quotedMsgOptions = quotedMessage.msgContextInfo(chat);
             delete options.quotedMessageId;
         }
 
+        /* ---------- mentions ---------- */
         if (options.mentionedJidList) {
-            options.mentionedJidList = await Promise.all(
-                options.mentionedJidList.map(async (id) => {
-                    const wid = window.Store.WidFactory.createWid(id);
-                    if (await window.Store.QueryExist(wid)) {
-                        return wid;
-                    }
-                })
-            );
-            options.mentionedJidList = options.mentionedJidList.filter(Boolean);
+            options.mentionedJidList = (
+                await Promise.all(
+                    options.mentionedJidList.map(async (id) => {
+                        const wid = window.Store.WidFactory.createWid(id);
+                        return (await window.Store.QueryExist(wid))
+                            ? wid
+                            : null;
+                    })
+                )
+            ).filter(Boolean);
         }
 
         if (options.groupMentions) {
@@ -91,6 +440,7 @@ exports.LoadUtils = () => {
             }));
         }
 
+        /* ---------- location ---------- */
         let locationOptions = {};
         if (options.location) {
             let { latitude, longitude, description, url } = options.location;
@@ -106,6 +456,7 @@ exports.LoadUtils = () => {
             delete options.location;
         }
 
+        /* ---------- poll ---------- */
         let _pollOptions = {};
         if (options.poll) {
             const { pollName, pollOptions } = options.poll;
@@ -113,8 +464,8 @@ exports.LoadUtils = () => {
                 options.poll.options;
             _pollOptions = {
                 type: "poll_creation",
-                pollName: pollName,
-                pollOptions: pollOptions,
+                pollName,
+                pollOptions,
                 pollSelectableOptionsCount: allowMultipleAnswers ? 0 : 1,
                 messageSecret:
                     Array.isArray(messageSecret) && messageSecret.length === 32
@@ -124,9 +475,10 @@ exports.LoadUtils = () => {
             delete options.poll;
         }
 
+        /* ---------- vcard / contact ---------- */
         let vcardOptions = {};
         if (options.contactCard) {
-            let contact = window.Store.Contact.get(options.contactCard);
+            const contact = window.Store.Contact.get(options.contactCard);
             vcardOptions = {
                 body: window.Store.VCard.vcardFromContactModel(contact).vcard,
                 type: "vcard",
@@ -134,10 +486,10 @@ exports.LoadUtils = () => {
             };
             delete options.contactCard;
         } else if (options.contactCardList) {
-            let contacts = options.contactCardList.map((c) =>
+            const contacts = options.contactCardList.map((c) =>
                 window.Store.Contact.get(c)
             );
-            let vcards = contacts.map((c) =>
+            const vcards = contacts.map((c) =>
                 window.Store.VCard.vcardFromContactModel(c)
             );
             vcardOptions = {
@@ -162,10 +514,11 @@ exports.LoadUtils = () => {
                     };
                 }
             } catch (_) {
-                // not a vcard
+                /* not a vcard */
             }
         }
 
+        /* ---------- link preview ---------- */
         if (options.linkPreview) {
             delete options.linkPreview;
             const link = window.Store.Validators.findLink(content);
@@ -182,6 +535,7 @@ exports.LoadUtils = () => {
             }
         }
 
+        /* ---------- buttons ---------- */
         let buttonOptions = {};
         if (options.buttons) {
             let caption;
@@ -189,25 +543,22 @@ exports.LoadUtils = () => {
                 content = options.buttons.body;
                 caption = content;
             } else {
-                caption = options.caption ? options.caption : " "; //Caption can't be empty
+                caption = options.caption ? options.caption : " "; // can't be empty
             }
             buttonOptions = {
                 productHeaderImageRejected: false,
                 isFromTemplate: false,
                 isDynamicReplyButtonsMsg: true,
-                title: options.buttons.title
-                    ? options.buttons.title
-                    : undefined,
-                footer: options.buttons.footer
-                    ? options.buttons.footer
-                    : undefined,
+                title: options.buttons.title || undefined,
+                footer: options.buttons.footer || undefined,
                 dynamicReplyButtons: options.buttons.buttons,
                 replyButtons: options.buttons.buttons,
-                caption: caption,
+                caption,
             };
             delete options.buttons;
         }
 
+        /* ---------- list ---------- */
         let listOptions = {};
         if (options.list) {
             if (
@@ -219,16 +570,14 @@ exports.LoadUtils = () => {
             listOptions = {
                 type: "list",
                 footer: options.list.footer,
-                list: {
-                    ...options.list,
-                    listType: 1,
-                },
+                list: { ...options.list, listType: 1 },
                 body: options.list.description,
             };
             delete options.list;
             delete listOptions.list.footer;
         }
 
+        /* ---------- bot ---------- */
         const botOptions = {};
         if (options.invokedBotWid) {
             botOptions.messageSecret = window.crypto.getRandomValues(
@@ -248,9 +597,9 @@ exports.LoadUtils = () => {
             delete options.invokedBotWid;
         }
 
+        /* ---------- IDs & keys ---------- */
         const meUser = window.Store.User.getMaybeMeUser();
         const newId = await window.Store.MsgKey.newId();
-
         const newMsgId = new window.Store.MsgKey({
             from: meUser,
             to: chat.id,
@@ -265,6 +614,7 @@ exports.LoadUtils = () => {
         const ephemeralFields =
             window.Store.EphemeralFields.getEphemeralFields(chat);
 
+        /* ---------- assemble message ---------- */
         const message = {
             ...options,
             id: newMsgId,
@@ -274,9 +624,9 @@ exports.LoadUtils = () => {
             to: chat.id,
             local: true,
             self: "out",
-            t: parseInt(new Date().getTime() / 1000),
+            t: Math.floor(Date.now() / 1000),
             isNewMsg: true,
-            type: "chat",
+            type: attOptions.type || "chat",
             ...ephemeralFields,
             ...locationOptions,
             ..._pollOptions,
@@ -290,11 +640,10 @@ exports.LoadUtils = () => {
             ...extraOptions,
         };
 
-        // Bot's won't reply if canonicalUrl is set (linking)
-        if (botOptions) {
-            delete message.canonicalUrl;
-        }
+        /* Bots won't reply if canonicalUrl is set */
+        if (Object.keys(botOptions).length) delete message.canonicalUrl;
 
+        /* ---------- send ---------- */
         await window.Store.SendMessage.addAndSendMsgToChat(chat, message);
         return window.Store.Msg.get(newMsgId._serialized);
     };
@@ -395,7 +744,11 @@ exports.LoadUtils = () => {
         mediaInfo,
         { forceVoice, forceDocument, forceGif }
     ) => {
-        const file = window.WWebJS.mediaInfoToFile(mediaInfo);
+        const file =
+            mediaInfo instanceof File
+                ? mediaInfo
+                : window.WWebJS.mediaInfoToFile(mediaInfo);
+
         const mData = await window.Store.OpaqueData.createFromData(
             file,
             file.type

@@ -10,6 +10,7 @@ const {
     DefaultOptions,
     Events,
     WAState,
+    MessageTypes,
 } = require("./util/Constants");
 const { ExposeAuthStore } = require("./util/Injected/AuthStore/AuthStore");
 const { ExposeStore } = require("./util/Injected/Store");
@@ -1259,8 +1260,8 @@ class Client extends EventEmitter {
 
     /**
      * Mark as seen for the Chat
-     *  @param {string} chatId
-     *  @returns {Promise<boolean>} result
+     * @param {string} chatId
+     * @returns {Promise<boolean>} result
      *
      */
     async sendSeen(chatId) {
@@ -1300,15 +1301,16 @@ class Client extends EventEmitter {
      */
 
     /**
-     * Send a message to a specific chatId
-     * @param {string} chatId
-     * @param {string|MessageMedia|Location|Poll|Contact|Array<Contact>|Buttons|List} content
-     * @param {MessageSendOptions} [options] - Options used when sending the message
+     * Send a message to a specific chatId.
      *
-     * @returns {Promise<Message>} Message that was just sent
+     * @param  {string}                          chatId
+     * @param  {string|MessageMedia|Location|Poll|Contact|Array<Contact>|Buttons|List} content
+     * @param  {MessageSendOptions & {preparedMedia?: Object}} [options]
+     * @returns {Promise<Message>}
      */
     async sendMessage(chatId, content, options = {}) {
-        let internalOptions = {
+        /* ---------- build base options object ---------- */
+        const internalOptions = {
             linkPreview: options.linkPreview === false ? undefined : true,
             sendAudioAsVoice: options.sendAudioAsVoice,
             sendVideoAsGif: options.sendVideoAsGif,
@@ -1318,20 +1320,19 @@ class Client extends EventEmitter {
             quotedMessageId: options.quotedMessageId,
             parseVCards: options.parseVCards === false ? false : true,
             mentionedJidList: Array.isArray(options.mentions)
-                ? options.mentions.map((contact) =>
-                      contact?.id ? contact.id._serialized : contact
-                  )
+                ? options.mentions.map((c) => (c?.id ? c.id._serialized : c))
                 : [],
             extraOptions: options.extra,
+            preparedMedia: options.preparedMedia, // <--- NEW
         };
 
+        /* ---------- deprecation warnings ---------- */
         if (options.gifPlayback !== undefined) {
             internalOptions.sendVideoAsGif = options.gifPlayback;
             console.warn(
                 'WARNING: The "gifPlayback" option is deprecated. Please use "sendVideoAsGif" instead.'
             );
         }
-
         if (options.mentions?.some((m) => m.id)) {
             console.warn(
                 "Mentions with an array of Contact are now deprecated. See more at https://github.com/pedroslopez/whatsapp-web.js/pull/2166."
@@ -1339,16 +1340,19 @@ class Client extends EventEmitter {
             options.mentions = options.mentions.map((a) => a.id._serialized);
         }
 
-        const sendSeen =
-            typeof options.sendSeen === "undefined" ? true : options.sendSeen;
-
-        if (content instanceof MessageMedia) {
+        /* ---------- input-type routing ---------- */
+        if (options.preparedMedia) {
+            // already-processed media – nothing more to do on the Node side
+            content = content || ""; // keep body empty unless user supplied text
+        } else if (content instanceof MessageMedia) {
             internalOptions.attachment = content;
-            (internalOptions.isViewOnce = options.isViewOnce), (content = "");
+            internalOptions.isViewOnce = options.isViewOnce;
+            content = "";
         } else if (options.media instanceof MessageMedia) {
             internalOptions.attachment = options.media;
             internalOptions.caption = content;
-            (internalOptions.isViewOnce = options.isViewOnce), (content = "");
+            internalOptions.isViewOnce = options.isViewOnce;
+            content = "";
         } else if (content instanceof Location) {
             internalOptions.location = content;
             content = "";
@@ -1358,19 +1362,14 @@ class Client extends EventEmitter {
         } else if (content instanceof Contact) {
             internalOptions.contactCard = content.id._serialized;
             content = "";
-        } else if (
-            Array.isArray(content) &&
-            content.length > 0 &&
-            content[0] instanceof Contact
-        ) {
+        } else if (Array.isArray(content) && content[0] instanceof Contact) {
             internalOptions.contactCardList = content.map(
-                (contact) => contact.id._serialized
+                (c) => c.id._serialized
             );
             content = "";
         } else if (content instanceof Buttons) {
-            if (content.type !== "chat") {
+            if (content.type !== "chat")
                 internalOptions.attachment = content.body;
-            }
             internalOptions.buttons = content;
             content = "";
         } else if (content instanceof List) {
@@ -1378,7 +1377,12 @@ class Client extends EventEmitter {
             content = "";
         }
 
-        if (internalOptions.sendMediaAsSticker && internalOptions.attachment) {
+        /* ---------- sticker conversion ---------- */
+        if (
+            internalOptions.sendMediaAsSticker &&
+            internalOptions.attachment &&
+            !internalOptions.preparedMedia
+        ) {
             internalOptions.attachment = await Util.formatToWebpSticker(
                 internalOptions.attachment,
                 {
@@ -1390,25 +1394,24 @@ class Client extends EventEmitter {
             );
         }
 
+        /* ---------- sendSeen flag ---------- */
+        const sendSeen =
+            options.sendSeen === undefined ? true : options.sendSeen;
+
+        /* ---------- hand off to the in-page helper ---------- */
         const { message: newMessage, error } = await this.pupPage.evaluate(
-            async (chatId, message, options, sendSeen) => {
+            async (chatId, body, opts, seen) => {
                 const chatWid = window.Store.WidFactory.createWid(chatId);
                 const chat = await window.Store.Chat.find(chatWid);
 
-                if (!chat) {
-                    throw new Error("Chat not found");
-                }
+                if (!chat) throw new Error("Chat not found");
 
-                let errInfo = null;
-                let result = null;
+                let result = null,
+                    errInfo = null;
                 try {
-                    const msg = await window.WWebJS.sendMessage(
-                        chat,
-                        message,
-                        options,
-                        sendSeen
-                    );
-                    result = window.WWebJS.getMessageModel(msg);
+                    if (seen) await chat.sendSeen(); // optional mark-as-read
+                    const m = await window.WWebJS.sendMessage(chat, body, opts);
+                    result = window.WWebJS.getMessageModel(m);
                 } catch (e) {
                     errInfo = {
                         name: e.name,
@@ -1418,7 +1421,6 @@ class Client extends EventEmitter {
                         chatId: chatWid,
                     };
                 }
-
                 return { message: result, error: errInfo };
             },
             chatId,
@@ -1465,33 +1467,6 @@ class Client extends EventEmitter {
                 document.getElementById(id)?.remove();
             }
         }, inputId);
-    }
-
-    async sendPreparedMedia(chatId, uniqueId) {
-        const message = await this.pupPage.evaluate(
-            async (chatId, key) => {
-                const chat = window.Store.Chat.get(chatId);
-                const mediaData = window.WWebJS.preparedMediaMap?.[key];
-
-                if (!mediaData) {
-                    console.error(
-                        "Weren't able to get media from cache by Id:",
-                        key
-                    );
-                    return;
-                }
-
-                const msg = await window.WWebJS.sendRawMediaMessage(
-                    chat,
-                    mediaData
-                );
-                return window.WWebJS.getMessageModel(msg);
-            },
-            chatId,
-            `wwebjs-upload-${uniqueId}`
-        );
-
-        return new Message(this, message);
     }
 
     /**
@@ -2362,7 +2337,7 @@ class Client extends EventEmitter {
     }
 
     /**
-     * Setting  autoload download audio
+     * Setting autoload download audio
      * @param {boolean} flag true/false
      */
     async setAutoDownloadAudio(flag) {
@@ -2377,7 +2352,7 @@ class Client extends EventEmitter {
     }
 
     /**
-     * Setting  autoload download documents
+     * Setting autoload download documents
      * @param {boolean} flag true/false
      */
     async setAutoDownloadDocuments(flag) {
@@ -2393,7 +2368,7 @@ class Client extends EventEmitter {
     }
 
     /**
-     * Setting  autoload download photos
+     * Setting autoload download photos
      * @param {boolean} flag true/false
      */
     async setAutoDownloadPhotos(flag) {
@@ -2506,7 +2481,7 @@ class Client extends EventEmitter {
                             event,
                             async (msg) => {
                                 if (msg.isNewMsg) {
-                                    if (msg.type === "ciphertext") {
+                                    if (msg.type === MessageTypes.CIPHERTEXT) {
                                         try {
                                             await window.Store.CryptoLib.decryptE2EMessage(
                                                 msg
