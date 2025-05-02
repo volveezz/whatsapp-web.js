@@ -7,8 +7,6 @@ const Order = require("./Order");
 const Payment = require("./Payment");
 const Reaction = require("./Reaction");
 const Contact = require("./Contact");
-const fs = require("fs/promises");
-const path = require("path");
 const { MessageTypes } = require("../util/Constants");
 
 /**
@@ -628,101 +626,107 @@ class Message extends Base {
             return;
         }
 
-        const result = await this.client.pupPage.evaluate(async (msgId) => {
-            const status = { ok: true };
+        const result = await this.client.pupPage.evaluate(
+            async (msgId, downloadPath) => {
+                const status = { ok: true };
 
-            try {
-                const msg =
-                    window.Store.Msg.get(msgId) ||
-                    (await window.Store.Msg.getMessagesById([msgId]))
-                        ?.messages?.[0];
+                try {
+                    const msg =
+                        window.Store.Msg.get(msgId) ||
+                        (await window.Store.Msg.getMessagesById([msgId]))
+                            ?.messages?.[0];
 
-                if (!msg?.mediaData?.mediaStage) {
-                    console.log("[WAWEBJS] No media data found");
-                    status.ok = false;
-                    return { status };
-                }
-
-                if (msg.mediaData.mediaStage !== "RESOLVED") {
-                    await msg.downloadMedia({
-                        downloadEvenIfExpensive: true,
-                        rmrReason: 1,
-                    });
-
-                    let tries = 0;
-                    while (
-                        msg.mediaData.mediaStage !== "RESOLVED" &&
-                        !msg.mediaData.mediaStage.includes("ERROR") &&
-                        tries++ < 10
-                    ) {
-                        await new Promise((res) => setTimeout(res, 300));
+                    if (!msg?.mediaData?.mediaStage) {
+                        console.log("[WAWEBJS] No media data found");
+                        status.ok = false;
+                        return { status };
                     }
 
                     if (msg.mediaData.mediaStage !== "RESOLVED") {
-                        console.log(
-                            `mediaStage still not RESOLVED after retries: ${msg.mediaData.mediaStage}`
-                        );
-                        return { status };
+                        await msg.downloadMedia({
+                            downloadEvenIfExpensive: true,
+                            rmrReason: 1,
+                        });
+
+                        let tries = 0;
+                        while (
+                            msg.mediaData.mediaStage !== "RESOLVED" &&
+                            !msg.mediaData.mediaStage.includes("ERROR") &&
+                            tries++ < 10
+                        ) {
+                            await new Promise((res) => setTimeout(res, 300));
+                        }
+
+                        if (msg.mediaData.mediaStage !== "RESOLVED") {
+                            console.log(
+                                `mediaStage still not RESOLVED after retries: ${msg.mediaData.mediaStage}`
+                            );
+                            return { status };
+                        }
                     }
+
+                    const decryptedMedia =
+                        await window.Store.DownloadManager.downloadAndMaybeDecrypt(
+                            {
+                                directPath: msg.directPath,
+                                encFilehash: msg.encFilehash,
+                                filehash: msg.filehash,
+                                mediaKey: msg.mediaKey,
+                                mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                                type: msg.type,
+                                signal: AbortSignal.timeout(60_000),
+                            }
+                        );
+
+                    const filename =
+                        msg.filename ||
+                        `ls_media-${(msg.id && msg.id.id) || Date.now()}`;
+                    const mimetype = msg.mimetype || "application/octet-stream";
+                    const filesize = msg.size;
+
+                    // 1. Creating a Blob from the decrypted media
+                    const blob = new Blob([decryptedMedia], { type: mimetype });
+
+                    // 2. Creating an Object URL for that Blob
+                    const url = URL.createObjectURL(blob);
+
+                    // 3. Creating a temporary <a> element
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.download = filename;
+
+                    // 4. Starting the download
+                    document.body.appendChild(link);
+                    link.click();
+
+                    // 5. Cleaning up
+                    document.body.removeChild(link);
+                    URL.revokeObjectURL(url);
+
+                    console.log(
+                        `[WAWEBJS EVAL] Download triggered for: ${filename}`
+                    );
+
+                    // Returning metadata to Node env
+                    return {
+                        status,
+                        filename,
+                        mimetype,
+                        filesize,
+                        path: `${downloadPath}/${filename}`,
+                    };
+                } catch (e) {
+                    console.error(
+                        "[WAWEBJS] Exception during media download:",
+                        e.message || e.toString()
+                    );
+                    status.ok = false;
+                    return { status };
                 }
-
-                const decryptedMedia =
-                    await window.Store.DownloadManager.downloadAndMaybeDecrypt({
-                        directPath: msg.directPath,
-                        encFilehash: msg.encFilehash,
-                        filehash: msg.filehash,
-                        mediaKey: msg.mediaKey,
-                        mediaKeyTimestamp: msg.mediaKeyTimestamp,
-                        type: msg.type,
-                        signal: AbortSignal.timeout(60_000),
-                    });
-
-                const filename =
-                    msg.filename ||
-                    `ls_media-${(msg.id && msg.id.id) || Date.now()}`;
-                const mimetype = msg.mimetype || "application/octet-stream";
-                const filesize = msg.size;
-
-                // 1. Creating a Blob from the decrypted media
-                const blob = new Blob([decryptedMedia], { type: mimetype });
-
-                // 2. Creating an Object URL for that Blob
-                const url = URL.createObjectURL(blob);
-
-                // 3. Creating a temporary <a> element
-                const link = document.createElement("a");
-                link.href = url;
-                link.download = filename;
-
-                // 4. Starting the download
-                document.body.appendChild(link);
-                link.click();
-
-                // 5. Cleaning up
-                document.body.removeChild(link);
-                URL.revokeObjectURL(url);
-
-                console.log(
-                    `[WAWEBJS EVAL] Download triggered for: ${filename}`
-                );
-
-                // Returning metadata to Node env
-                return {
-                    status,
-                    filename,
-                    mimetype,
-                    filesize,
-                    path: `${this.client.options.downloadPath}/${filename}`,
-                };
-            } catch (e) {
-                console.error(
-                    "[WAWEBJS] Exception during media download:",
-                    e.message || e.toString()
-                );
-                status.ok = false;
-                return { status };
-            }
-        }, this.id._serialized);
+            },
+            this.id._serialized,
+            this.client.options.downloadPath
+        );
 
         if (!result?.status?.ok) {
             console.error("[DownloadMedia] Failed to download media");
