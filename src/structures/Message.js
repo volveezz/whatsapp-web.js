@@ -522,23 +522,6 @@ class Message extends Base {
             const logs = [];
             const status = { ok: true };
 
-            function log(...args) {
-                logs.push(
-                    args
-                        .map((a) => {
-                            if (typeof a === "object") {
-                                try {
-                                    return JSON.stringify(a);
-                                } catch {
-                                    return "[Circular]";
-                                }
-                            }
-                            return String(a);
-                        })
-                        .join(" ")
-                );
-            }
-
             try {
                 const msg =
                     window.Store.Msg.get(msgId) ||
@@ -546,7 +529,7 @@ class Message extends Base {
                         ?.messages?.[0];
 
                 if (!msg?.mediaData?.mediaStage) {
-                    log("[WAWEBJS] No media data found");
+                    console.log("[WAWEBJS] No media data found");
                     status.ok = false;
                     return { status, logs };
                 }
@@ -568,7 +551,7 @@ class Message extends Base {
                     }
 
                     if (msg.mediaData.mediaStage !== "RESOLVED") {
-                        log(
+                        console.log(
                             `mediaStage still not RESOLVED after retries: ${msg.mediaData.mediaStage}`
                         );
                         return { logs };
@@ -579,7 +562,7 @@ class Message extends Base {
                     msg.mediaData.mediaStage.includes("ERROR") ||
                     msg.mediaData.mediaStage === "FETCHING"
                 ) {
-                    log(
+                    console.log(
                         `[WAWEBJS] Media stage not ready: ${msg.mediaData.mediaStage}`
                     );
                     status.ok = false;
@@ -609,7 +592,7 @@ class Message extends Base {
                     filesize: msg.size,
                 };
             } catch (e) {
-                log(
+                console.log(
                     "[WAWEBJS] Exception during media download:",
                     e.message || e.toString()
                 );
@@ -618,18 +601,8 @@ class Message extends Base {
             }
         }, this.id._serialized);
 
-        // Only log when things go wrong
         if (!result?.status?.ok || !result.data) {
             console.error("[DownloadMedia] Failed to download media");
-            if (result?.logs?.length) {
-                for (const line of result.logs) {
-                    console.error(`[PuppeteerLog] ${line}`);
-                }
-            } else {
-                console.error(
-                    "[DownloadMedia] No logs returned from browser context"
-                );
-            }
             return undefined;
         }
 
@@ -639,6 +612,111 @@ class Message extends Base {
             result.filename,
             result.filesize
         );
+    }
+
+    /**
+     * Downloads and saves the attached media to disk under a session-specific directory
+     * @param {string} sessionId - Unique identifier for session (used for folder path)
+     * @param {string} saveRootDir - Absolute root path where media files are stored
+     * @returns {Promise<string | undefined>} - Full path to the saved file or undefined on failure
+     */
+    async downloadAndSaveMedia(sessionId, saveRootDir) {
+        if (!this.hasMedia) {
+            console.error(
+                "[DownloadMedia] Tried to download media from message without it"
+            );
+            return;
+        }
+
+        const result = await this.client.pupPage.evaluate(async (msgId) => {
+            const logs = [];
+            const status = { ok: true };
+
+            try {
+                const msg =
+                    window.Store.Msg.get(msgId) ||
+                    (await window.Store.Msg.getMessagesById([msgId]))
+                        ?.messages?.[0];
+
+                if (!msg?.mediaData?.mediaStage) {
+                    console.log("[WAWEBJS] No media data found");
+                    status.ok = false;
+                    return { status, logs };
+                }
+
+                if (msg.mediaData.mediaStage !== "RESOLVED") {
+                    await msg.downloadMedia({
+                        downloadEvenIfExpensive: true,
+                        rmrReason: 1,
+                    });
+
+                    let tries = 0;
+                    while (
+                        msg.mediaData.mediaStage !== "RESOLVED" &&
+                        !msg.mediaData.mediaStage.includes("ERROR") &&
+                        tries++ < 10
+                    ) {
+                        await new Promise((res) => setTimeout(res, 300));
+                    }
+
+                    if (msg.mediaData.mediaStage !== "RESOLVED") {
+                        console.log(
+                            `mediaStage still not RESOLVED after retries: ${msg.mediaData.mediaStage}`
+                        );
+                        return { status, logs };
+                    }
+                }
+
+                const decryptedMedia =
+                    await window.Store.DownloadManager.downloadAndMaybeDecrypt({
+                        directPath: msg.directPath,
+                        encFilehash: msg.encFilehash,
+                        filehash: msg.filehash,
+                        mediaKey: msg.mediaKey,
+                        mediaKeyTimestamp: msg.mediaKeyTimestamp,
+                        type: msg.type,
+                        signal: AbortSignal.timeout(60_000),
+                    });
+
+                const buffer = await decryptedMedia.arrayBuffer();
+                return {
+                    status,
+                    data: Array.from(new Uint8Array(buffer)),
+                    mimetype: msg.mimetype,
+                    filename:
+                        msg.filename || `${msg.type}_${msg.id._serialized}`,
+                    filesize: msg.size,
+                };
+            } catch (e) {
+                console.log(
+                    "[WAWEBJS] Exception during media download:",
+                    e.message || e.toString()
+                );
+                status.ok = false;
+                return { status, logs };
+            }
+        }, this.id._serialized);
+
+        if (!result?.status?.ok || !result?.data) {
+            console.error("[DownloadMedia] Failed to download media");
+            return;
+        }
+
+        const sessionPath = path.join(saveRootDir, sessionId);
+        const filename = path.basename(
+            result.filename || `media_${Date.now()}`
+        );
+        const savePath = path.join(sessionPath, filename);
+
+        try {
+            await fs.mkdir(sessionPath, { recursive: true });
+            const buffer = Buffer.from(result.data);
+            await fs.writeFile(savePath, buffer);
+            return savePath;
+        } catch (e) {
+            console.error(`[DownloadMedia] Failed to save file: ${e.message}`);
+            return;
+        }
     }
 
     /**

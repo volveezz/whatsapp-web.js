@@ -1077,6 +1077,11 @@ declare namespace WAWebJS {
         delete: (everyone?: boolean) => Promise<void>;
         /** Downloads and returns the attached message media */
         downloadMedia: () => Promise<MessageMedia>;
+        /** Downloads and saves the attached message media */
+        downloadAndSaveMedia: (
+            sessionId: string,
+            saveRootDir: string
+        ) => Promise<string>;
         /** Returns the Chat this message was sent in */
         getChat: () => Promise<Chat>;
         /** Returns the Contact this message was sent from */
