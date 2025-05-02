@@ -129,282 +129,649 @@ class Client extends EventEmitter {
      * Injection logic
      * Private function
      */
+    // async inject() {
+    //     if (this.isInjecting) {
+    //         console.warn("WWebJS: Injection already in progress, skipping");
+    //         return;
+    //     }
+    //     if (!this.pupPage || this.pupPage.isClosed()) {
+    //         console.warn(
+    //             "WWebJS: Injection attempted on closed page, skipping"
+    //         );
+    //         return;
+    //     }
+
+    //     this.isInjecting = true;
+
+    //     try {
+    //         const replaceBinding = async (name, fn) => {
+    //             const page = this.pupPage;
+
+    //             if (!page || page.isClosed()) {
+    //                 console.warn(
+    //                     `WWebJS replaceBinding: Page closed or invalid for '${name}'. Skipping.`
+    //                 );
+    //                 return;
+    //             }
+
+    //             // 1. Attempt to remove the existing binding
+    //             try {
+    //                 console.log(
+    //                     `WWebJS replaceBinding: Attempting removeExposedFunction for '${name}'...`
+    //                 );
+    //                 await page.removeExposedFunction(name);
+    //                 console.log(
+    //                     `WWebJS replaceBinding: Successfully removed (or confirmed absent) binding '${name}'.`
+    //                 );
+    //                 await new Promise((resolve) => setTimeout(resolve, 50));
+    //             } catch (removeErr) {
+    //                 if (!removeErr.message.includes("does not exist")) {
+    //                     console.error(
+    //                         `WWebJS replaceBinding: removeExposedFunction for '${name}' failed: ${removeErr.message}`
+    //                     );
+    //                 }
+    //             }
+
+    //             // 2. Expose the new function
+    //             try {
+    //                 console.log(
+    //                     `WWebJS replaceBinding: Attempting exposeFunction for '${name}'...`
+    //                 );
+    //                 await page.exposeFunction(name, fn);
+    //                 console.log(
+    //                     `WWebJS replaceBinding: Successfully exposed function '${name}'.`
+    //                 );
+    //             } catch (exposeErr) {
+    //                 console.error(
+    //                     `WWebJS replaceBinding: exposeFunction FAILED for '${name}' AFTER attempting removal: ${exposeErr.message}`
+    //                 );
+    //                 if (exposeErr.message.includes("already exists")) {
+    //                     console.error(
+    //                         `WWebJS replaceBinding: CRITICAL - '${name}' still exists after removeExposedFunction call. Possible race condition or browser state issue.`
+    //                     );
+    //                     try {
+    //                         await page.evaluate((n) => {
+    //                             delete window[n];
+    //                         }, name);
+    //                     } catch (e) {}
+    //                 }
+    //                 throw exposeErr;
+    //             }
+    //         };
+
+    //         // wait until Debug.VERSION shows up
+    //         await this.pupPage.waitForFunction(
+    //             "window.Debug?.VERSION !== undefined",
+    //             { timeout: this.options.authTimeoutMs }
+    //         );
+
+    //         const version = await this.getWWebVersion();
+
+    //         // inject core store–access helpers
+    //         await this.pupPage.evaluate(ExposeAuthStore);
+
+    //         // wait for AuthStore ready state
+    //         const needAuthentication = await this.pupPage.evaluate(async () => {
+    //             let state = window.AuthStore.AppState.state;
+    //             if (["OPENING", "UNLAUNCHED", "PAIRING"].includes(state)) {
+    //                 await new Promise((resolve) => {
+    //                     const watcher = (_s, st) => {
+    //                         if (
+    //                             !["OPENING", "UNLAUNCHED", "PAIRING"].includes(
+    //                                 st
+    //                             )
+    //                         ) {
+    //                             window.AuthStore.AppState.off(
+    //                                 "change:state",
+    //                                 watcher
+    //                             );
+    //                             resolve();
+    //                         }
+    //                     };
+    //                     window.AuthStore.AppState.on("change:state", watcher);
+    //                 });
+    //                 state = window.AuthStore.AppState.state;
+    //             }
+    //             return state === "UNPAIRED" || state === "UNPAIRED_IDLE";
+    //         });
+
+    //         if (needAuthentication) {
+    //             const { failed, failureEventPayload, restart } =
+    //                 await this.authStrategy.onAuthenticationNeeded();
+
+    //             if (failed) {
+    //                 /**
+    //                  * Emitted when there has been an error while trying to restore an existing session
+    //                  * @event Client#auth_failure
+    //                  * @param {string} message
+    //                  */
+    //                 this.emit(
+    //                     Events.AUTHENTICATION_FAILURE,
+    //                     failureEventPayload
+    //                 );
+    //                 await this.destroy();
+    //                 if (restart) {
+    //                     // session restore failed so try again but without session to force new authentication
+    //                     return this.initialize();
+    //                 }
+    //                 return;
+    //             }
+    //             // QR events
+    //             let qrRetries = 0;
+    //             await replaceBinding("onQRChangedEvent", async (qr) => {
+    //                 this.emit(Events.QR_RECEIVED, qr);
+    //                 if (
+    //                     this.options.qrMaxRetries > 0 &&
+    //                     ++qrRetries > this.options.qrMaxRetries
+    //                 ) {
+    //                     this.emit(
+    //                         Events.DISCONNECTED,
+    //                         "Max qrcode retries reached"
+    //                     );
+    //                     await this.destroy();
+    //                 }
+    //             });
+
+    //             await this.pupPage.evaluate(async () => {
+    //                 // build QR payload
+    //                 const reg =
+    //                     await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
+    //                 const noise =
+    //                     await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
+    //                 const staticKey = window.AuthStore.Base64Tools.encodeB64(
+    //                     noise.staticKeyPair.pubKey
+    //                 );
+    //                 const identityKey = window.AuthStore.Base64Tools.encodeB64(
+    //                     reg.identityKeyPair.pubKey
+    //                 );
+    //                 const advSecret =
+    //                     await window.AuthStore.RegistrationUtils.getADVSecretKey();
+    //                 const plat =
+    //                     window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
+    //                 const makeQR = (ref) =>
+    //                     `${ref},${staticKey},${identityKey},${advSecret},${plat}`;
+
+    //                 // initial + future
+    //                 window.onQRChangedEvent(makeQR(window.AuthStore.Conn.ref));
+    //                 window.AuthStore.Conn.off("change:ref");
+    //                 window.AuthStore.Conn.on("change:ref", (_, ref) => {
+    //                     window.onQRChangedEvent(makeQR(ref));
+    //                 });
+    //             });
+    //         }
+
+    //         // always replace these three bindings
+    //         await replaceBinding(
+    //             "onAuthAppStateChangedEvent",
+    //             async (state) => {
+    //                 if (state === "UNPAIRED_IDLE") {
+    //                     window.Store.Cmd.refreshQR();
+    //                 }
+    //             }
+    //         ).catch((e) =>
+    //             console.error(
+    //                 "Failed to replace binding for onAuthAppStateChangedEvent",
+    //                 e
+    //             )
+    //         );
+
+    //         await replaceBinding("onAppStateHasSyncedEvent", async () => {
+    //             const payload = await this.authStrategy.getAuthEventPayload();
+    //             this.emit(Events.AUTHENTICATED, payload);
+
+    //             // only inject Store/WWebJS once per session
+    //             const already = await this.pupPage.evaluate(
+    //                 () =>
+    //                     typeof window.Store !== "undefined" &&
+    //                     typeof window.WWebJS !== "undefined"
+    //             );
+    //             if (!already) {
+    //                 // optional local caching
+    //                 if (
+    //                     this.options.webVersionCache.type === "local" &&
+    //                     this.currentIndexHtml
+    //                 ) {
+    //                     const { type, ...opts } = this.options.webVersionCache;
+    //                     await WebCacheFactory.createWebCache(
+    //                         type,
+    //                         opts
+    //                     ).persist(this.currentIndexHtml, version);
+    //                 }
+    //                 await this.pupPage.evaluate(ExposeStore);
+
+    //                 // wait for Store
+    //                 await this.pupPage.waitForFunction(
+    //                     "window.Store !== undefined"
+    //                 );
+    //                 // set client info & interface
+    //                 this.info = new ClientInfo(
+    //                     this,
+    //                     await this.pupPage.evaluate(() => ({
+    //                         ...window.Store.Conn.serialize(),
+    //                         wid: window.Store.User.getMeUser(),
+    //                     }))
+    //                 );
+    //                 this.interface = new InterfaceController(this);
+    //                 await this.pupPage.evaluate(LoadUtils);
+    //                 await this.attachEventListeners();
+    //             }
+
+    //             this.emit(Events.READY);
+    //             this.authStrategy.afterAuthReady();
+    //         });
+
+    //         let lastPercent = null;
+    //         await replaceBinding(
+    //             "onOfflineProgressUpdateEvent",
+    //             async (percent) => {
+    //                 if (percent !== lastPercent) {
+    //                     lastPercent = percent;
+    //                     this.emit(Events.LOADING_SCREEN, percent);
+    //                 }
+    //             }
+    //         );
+
+    //         await replaceBinding("onLogoutEvent", async () => {
+    //             this.lastLoggedOut = true;
+    //             await this.pupPage
+    //                 .waitForNavigation({ waitUntil: "load", timeout: 5000 })
+    //                 .catch(() => {});
+    //         });
+
+    //         // sub to WA events
+    //         await this.pupPage.evaluate(() => {
+    //             if (window.__waEventSubsInjected) return;
+
+    //             window.AuthStore.AppState.on("change:state", (_s, st) =>
+    //                 window.onAuthAppStateChangedEvent(st)
+    //             );
+    //             window.AuthStore.AppState.on("change:hasSynced", () =>
+    //                 window.onAppStateHasSyncedEvent()
+    //             );
+    //             window.AuthStore.Cmd.on("offline_progress_update", () =>
+    //                 window.onOfflineProgressUpdateEvent(
+    //                     window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
+    //                 )
+    //             );
+    //             window.AuthStore.Cmd.on("logout", async () =>
+    //                 window.onLogoutEvent()
+    //             );
+
+    //             window.__waEventSubsInjected = true;
+    //         });
+    //     } catch (err) {
+    //         console.error("WWebJS: Error during injection", err);
+    //     } finally {
+    //         this.isInjecting = false;
+    //     }
+    // }
     async inject() {
-        if (this.isInjecting) {
-            console.warn("WWebJS: Injection already in progress, skipping");
-            return;
-        }
-        if (!this.pupPage || this.pupPage.isClosed()) {
-            console.warn(
-                "WWebJS: Injection attempted on closed page, skipping"
-            );
-            return;
-        }
+        if (this.isInjecting) return; // re-entrancy guard
+        if (!this.pupPage || this.pupPage.isClosed()) return;
 
         this.isInjecting = true;
-
         try {
-            const replaceBinding = async (name, fn) => {
-                const page = this.pupPage;
+            /***** 1.  Install *once* the page-side preload (runs on every doc) */
+            if (!this._bridgePreloaded) {
+                const preload = `
+                (() => {
+                    if (window.__wwebjs_preload_done) return;
+                    window.__wwebjs_preload_done = true;
 
-                if (!page || page.isClosed()) {
-                    console.warn(
-                        `WWebJS replaceBinding: Page closed or invalid for '${name}'. Skipping.`
-                    );
-                    return;
-                }
+                    /*  --- one global bridge + queue ------------------- */
+                    window.__wwebjs_ready = false;
+                    window.__wwebjs_q = [];
+                    window.__wwebjs_bridge = (...args) => {
+                        if (!window.__wwebjs_ready) {
+                            window.__wwebjs_q.push(args);
+                            return;
+                        }
+                    };
+                    window.__wwebjs_emit = (...a) => window.__wwebjs_bridge(...a);
+                    /* -------------------------------------------------- */
+                })();`;
+                await this.pupPage.evaluateOnNewDocument(preload);
+                this._bridgePreloaded = true;
+            }
 
-                // 1. Attempt to remove the existing binding
-                try {
-                    console.log(
-                        `WWebJS replaceBinding: Attempting removeExposedFunction for '${name}'...`
-                    );
-                    await page.removeExposedFunction(name);
-                    console.log(
-                        `WWebJS replaceBinding: Successfully removed (or confirmed absent) binding '${name}'.`
-                    );
-                    await new Promise((resolve) => setTimeout(resolve, 50));
-                } catch (removeErr) {
-                    if (!removeErr.message.includes("does not exist")) {
-                        console.error(
-                            `WWebJS replaceBinding: removeExposedFunction for '${name}' failed: ${removeErr.message}`
-                        );
-                    }
-                }
-
-                // 2. Expose the new function
-                try {
-                    console.log(
-                        `WWebJS replaceBinding: Attempting exposeFunction for '${name}'...`
-                    );
-                    await page.exposeFunction(name, fn);
-                    console.log(
-                        `WWebJS replaceBinding: Successfully exposed function '${name}'.`
-                    );
-                } catch (exposeErr) {
-                    console.error(
-                        `WWebJS replaceBinding: exposeFunction FAILED for '${name}' AFTER attempting removal: ${exposeErr.message}`
-                    );
-                    if (exposeErr.message.includes("already exists")) {
-                        console.error(
-                            `WWebJS replaceBinding: CRITICAL - '${name}' still exists after removeExposedFunction call. Possible race condition or browser state issue.`
-                        );
-                        try {
-                            await page.evaluate((n) => {
-                                delete window[n];
-                            }, name);
-                        } catch (e) {}
-                    }
-                    throw exposeErr;
-                }
-            };
-
-            // wait until Debug.VERSION shows up
+            /***** 2.  Wait until WA core is present **************************/
             await this.pupPage.waitForFunction(
-                "window.Debug?.VERSION !== undefined",
+                "window.Debug && window.Debug.VERSION",
                 { timeout: this.options.authTimeoutMs }
             );
 
-            const version = await this.getWWebVersion();
+            /***** 3.  Expose (or replace) the Node-side bridge ***************/
+            await this.pupPage.exposeFunction(
+                "__wwebjs_bridge",
+                async (evt, ...payload) => {
+                    try {
+                        switch (evt) {
+                            /* ---------- connection / auth ---------------------- */
+                            case "auth_state": {
+                                const state = payload[0];
+                                this.emit(Events.STATE_CHANGED, state);
 
-            // inject core store–access helpers
-            await this.pupPage.evaluate(ExposeAuthStore);
-
-            // wait for AuthStore ready state
-            const needAuthentication = await this.pupPage.evaluate(async () => {
-                let state = window.AuthStore.AppState.state;
-                if (["OPENING", "UNLAUNCHED", "PAIRING"].includes(state)) {
-                    await new Promise((resolve) => {
-                        const watcher = (_s, st) => {
-                            if (
-                                !["OPENING", "UNLAUNCHED", "PAIRING"].includes(
-                                    st
-                                )
-                            ) {
-                                window.AuthStore.AppState.off(
-                                    "change:state",
-                                    watcher
-                                );
-                                resolve();
+                                const ACCEPTED = [
+                                    WAState.CONNECTED,
+                                    WAState.OPENING,
+                                    WAState.PAIRING,
+                                    WAState.TIMEOUT,
+                                ];
+                                if (!ACCEPTED.includes(state)) {
+                                    await this.authStrategy.disconnect();
+                                    this.emit(Events.DISCONNECTED, state);
+                                    await this.destroy();
+                                }
+                                break;
                             }
-                        };
-                        window.AuthStore.AppState.on("change:state", watcher);
-                    });
-                    state = window.AuthStore.AppState.state;
+                            case "auth_synced": {
+                                const p =
+                                    await this.authStrategy.getAuthEventPayload();
+                                this.emit(Events.AUTHENTICATED, p);
+                                break;
+                            }
+                            case "offline_progress":
+                                this.emit(Events.LOADING_SCREEN, payload[0]);
+                                break;
+
+                            case "logout":
+                                this.emit(Events.DISCONNECTED, "LOGOUT");
+                                await this.destroy();
+                                break;
+
+                            /* ---------- messages -------------------------------- */
+                            case "msg_ciphertext":
+                                this.emit(
+                                    Events.MESSAGE_CIPHERTEXT,
+                                    new Message(this, payload[0])
+                                );
+                                break;
+
+                            case "msg_add": {
+                                const msg = new Message(this, payload[0]);
+                                this.emit(Events.MESSAGE_CREATE, msg);
+                                if (!msg.id.fromMe)
+                                    this.emit(Events.MESSAGE_RECEIVED, msg);
+                                break;
+                            }
+
+                            case "msg_change":
+                                this.emit(
+                                    Events.MESSAGE_CREATE,
+                                    new Message(this, payload[0])
+                                );
+                                break;
+
+                            case "msg_change_type": {
+                                const msg = new Message(this, payload[0]);
+                                if (msg.type === "revoked") {
+                                    this.emit(
+                                        Events.MESSAGE_REVOKED_EVERYONE,
+                                        msg
+                                    );
+                                }
+                                break;
+                            }
+
+                            case "msg_ack":
+                                this.emit(
+                                    Events.MESSAGE_ACK,
+                                    new Message(this, payload[0]),
+                                    payload[1] /* ack value */
+                                );
+                                break;
+
+                            case "media_uploaded":
+                                this.emit(
+                                    Events.MEDIA_UPLOADED,
+                                    new Message(this, payload[0])
+                                );
+                                break;
+
+                            case "msg_remove":
+                                this.emit(
+                                    Events.MESSAGE_REVOKED_ME,
+                                    new Message(this, payload[0])
+                                );
+                                break;
+
+                            case "msg_edit":
+                                this.emit(
+                                    Events.MESSAGE_EDIT,
+                                    new Message(this, payload[0]),
+                                    payload[1], // new body
+                                    payload[2] // prev body
+                                );
+                                break;
+
+                            /* ---------- chats ----------------------------------- */
+                            case "chat_unread": {
+                                const chat = await this.getChatById(payload[0]);
+                                this.emit(Events.UNREAD_COUNT, chat);
+                                break;
+                            }
+
+                            case "chat_remove":
+                                this.emit(
+                                    Events.CHAT_REMOVED,
+                                    ChatFactory.create(this, payload[0])
+                                );
+                                break;
+
+                            case "chat_archive":
+                                this.emit(
+                                    Events.CHAT_ARCHIVED,
+                                    ChatFactory.create(this, payload[0]),
+                                    payload[1] /* curr */,
+                                    payload[2] /* prev */
+                                );
+                                break;
+
+                            /* ---------- calls ----------------------------------- */
+                            case "incoming_call":
+                                this.emit(
+                                    Events.INCOMING_CALL,
+                                    new Call(this, payload[0])
+                                );
+                                break;
+
+                            /* ---------- polls ----------------------------------- */
+                            case "poll_vote":
+                                this.emit(
+                                    Events.VOTE_UPDATE,
+                                    new PollVote(this, payload[0])
+                                );
+                                break;
+
+                            /* ---------- reactions ------------------------------- */
+                            case "reaction":
+                                payload[0].forEach((r) =>
+                                    this.emit(
+                                        Events.MESSAGE_REACTION,
+                                        new Reaction(this, r)
+                                    )
+                                );
+                                break;
+
+                            default:
+                                console.warn("[bridge] unknown evt", evt);
+                        }
+                    } catch (err) {
+                        console.error("[bridge dispatch]", err);
+                    }
                 }
-                return state === "UNPAIRED" || state === "UNPAIRED_IDLE";
+            );
+
+            /***** 4.  Flip ready flag & drain queued events ******************/
+            await this.pupPage.evaluate(() => {
+                window.__wwebjs_ready = true;
+                for (const args of window.__wwebjs_q)
+                    window.__wwebjs_bridge(...args);
+                window.__wwebjs_q.length = 0;
             });
 
-            if (needAuthentication) {
-                const { failed, failureEventPayload, restart } =
-                    await this.authStrategy.onAuthenticationNeeded();
+            /***** 5.  Inject WA Store helpers once per doc *******************/
+            const already = await this.pupPage.evaluate(
+                () => !!window.Store && !!window.WWebJS
+            );
 
-                if (failed) {
-                    /**
-                     * Emitted when there has been an error while trying to restore an existing session
-                     * @event Client#auth_failure
-                     * @param {string} message
-                     */
-                    this.emit(
-                        Events.AUTHENTICATION_FAILURE,
-                        failureEventPayload
-                    );
-                    await this.destroy();
-                    if (restart) {
-                        // session restore failed so try again but without session to force new authentication
-                        return this.initialize();
-                    }
-                    return;
-                }
-                // QR events
-                let qrRetries = 0;
-                await replaceBinding("onQRChangedEvent", async (qr) => {
-                    this.emit(Events.QR_RECEIVED, qr);
-                    if (
-                        this.options.qrMaxRetries > 0 &&
-                        ++qrRetries > this.options.qrMaxRetries
-                    ) {
-                        this.emit(
-                            Events.DISCONNECTED,
-                            "Max qrcode retries reached"
-                        );
-                        await this.destroy();
-                    }
-                });
-
-                await this.pupPage.evaluate(async () => {
-                    // build QR payload
-                    const reg =
-                        await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-                    const noise =
-                        await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-                    const staticKey = window.AuthStore.Base64Tools.encodeB64(
-                        noise.staticKeyPair.pubKey
-                    );
-                    const identityKey = window.AuthStore.Base64Tools.encodeB64(
-                        reg.identityKeyPair.pubKey
-                    );
-                    const advSecret =
-                        await window.AuthStore.RegistrationUtils.getADVSecretKey();
-                    const plat =
-                        window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
-                    const makeQR = (ref) =>
-                        `${ref},${staticKey},${identityKey},${advSecret},${plat}`;
-
-                    // initial + future
-                    window.onQRChangedEvent(makeQR(window.AuthStore.Conn.ref));
-                    window.AuthStore.Conn.off("change:ref");
-                    window.AuthStore.Conn.on("change:ref", (_, ref) => {
-                        window.onQRChangedEvent(makeQR(ref));
-                    });
-                });
+            if (!already) {
+                await this.pupPage.evaluate(ExposeAuthStore);
+                await this.pupPage.evaluate(ExposeStore);
+                await this.pupPage.evaluate(LoadUtils);
             }
 
-            // always replace these three bindings
-            await replaceBinding(
-                "onAuthAppStateChangedEvent",
-                async (state) => {
-                    if (state === "UNPAIRED_IDLE") {
-                        window.Store.Cmd.refreshQR();
-                    }
-                }
-            ).catch((e) =>
-                console.error(
-                    "Failed to replace binding for onAuthAppStateChangedEvent",
-                    e
-                )
-            );
-
-            await replaceBinding("onAppStateHasSyncedEvent", async () => {
-                const payload = await this.authStrategy.getAuthEventPayload();
-                this.emit(Events.AUTHENTICATED, payload);
-
-                // only inject Store/WWebJS once per session
-                const already = await this.pupPage.evaluate(
-                    () =>
-                        typeof window.Store !== "undefined" &&
-                        typeof window.WWebJS !== "undefined"
-                );
-                if (!already) {
-                    // optional local caching
-                    if (
-                        this.options.webVersionCache.type === "local" &&
-                        this.currentIndexHtml
-                    ) {
-                        const { type, ...opts } = this.options.webVersionCache;
-                        await WebCacheFactory.createWebCache(
-                            type,
-                            opts
-                        ).persist(this.currentIndexHtml, version);
-                    }
-                    await this.pupPage.evaluate(ExposeStore);
-
-                    // wait for Store
-                    await this.pupPage.waitForFunction(
-                        "window.Store !== undefined"
-                    );
-                    // set client info & interface
-                    this.info = new ClientInfo(
-                        this,
-                        await this.pupPage.evaluate(() => ({
-                            ...window.Store.Conn.serialize(),
-                            wid: window.Store.User.getMeUser(),
-                        }))
-                    );
-                    this.interface = new InterfaceController(this);
-                    await this.pupPage.evaluate(LoadUtils);
-                    await this.attachEventListeners();
-                }
-
-                this.emit(Events.READY);
-                this.authStrategy.afterAuthReady();
-            });
-
-            let lastPercent = null;
-            await replaceBinding(
-                "onOfflineProgressUpdateEvent",
-                async (percent) => {
-                    if (percent !== lastPercent) {
-                        lastPercent = percent;
-                        this.emit(Events.LOADING_SCREEN, percent);
-                    }
-                }
-            );
-
-            await replaceBinding("onLogoutEvent", async () => {
-                this.lastLoggedOut = true;
-                await this.pupPage
-                    .waitForNavigation({ waitUntil: "load", timeout: 5000 })
-                    .catch(() => {});
-            });
-
-            // sub to WA events
+            /***** 6.  Attach in-page listeners (idempotent) ******************/
             await this.pupPage.evaluate(() => {
-                if (window.__waEventSubsInjected) return;
+                /* ------------------------------------------------------------------
+                   Only install once per document                                         */
+                if (window.__wwebjs_eventHooksInstalled) return;
+                window.__wwebjs_eventHooksInstalled = true;
 
+                const emit = window.__wwebjs_emit; // single bridge helper
+
+                /* ---------- connection / auth ------------------------------------- */
                 window.AuthStore.AppState.on("change:state", (_s, st) =>
-                    window.onAuthAppStateChangedEvent(st)
+                    emit("auth_state", st)
                 );
+
                 window.AuthStore.AppState.on("change:hasSynced", () =>
-                    window.onAppStateHasSyncedEvent()
+                    emit("auth_synced")
                 );
+
                 window.AuthStore.Cmd.on("offline_progress_update", () =>
-                    window.onOfflineProgressUpdateEvent(
+                    emit(
+                        "offline_progress",
                         window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
                     )
                 );
-                window.AuthStore.Cmd.on("logout", async () =>
-                    window.onLogoutEvent()
+
+                window.AuthStore.Cmd.on("logout", () => emit("logout"));
+
+                /* ---------- messages ---------------------------------------------- */
+                window.Store.Msg.on("add", (msg) => {
+                    if (!msg.isNewMsg) return;
+
+                    if (msg.type === "ciphertext") {
+                        // defer final add until decrypted
+                        emit(
+                            "msg_ciphertext",
+                            window.WWebJS.getMessageModel(msg)
+                        );
+                        msg.once("change:type", (_m) =>
+                            emit("msg_add", window.WWebJS.getMessageModel(_m))
+                        );
+                    } else {
+                        emit("msg_add", window.WWebJS.getMessageModel(msg));
+                    }
+                });
+
+                window.Store.Msg.on("change", (m) =>
+                    emit("msg_change", window.WWebJS.getMessageModel(m))
                 );
 
-                window.__waEventSubsInjected = true;
+                window.Store.Msg.on("change:type", (m) =>
+                    emit("msg_change_type", window.WWebJS.getMessageModel(m))
+                );
+
+                window.Store.Msg.on("change:ack", (m, ack) =>
+                    emit("msg_ack", window.WWebJS.getMessageModel(m), ack)
+                );
+
+                window.Store.Msg.on("change:isUnsentMedia", (m, unsent) => {
+                    if (m.id.fromMe && !unsent)
+                        emit(
+                            "media_uploaded",
+                            window.WWebJS.getMessageModel(m)
+                        );
+                });
+
+                window.Store.Msg.on("remove", (m) => {
+                    if (m.isNewMsg)
+                        emit("msg_remove", window.WWebJS.getMessageModel(m));
+                });
+
+                window.Store.Msg.on(
+                    "change:body change:caption",
+                    (m, body, prev) =>
+                        emit(
+                            "msg_edit",
+                            window.WWebJS.getMessageModel(m),
+                            body,
+                            prev
+                        )
+                );
+
+                /* ---------- chats -------------------------------------------------- */
+                window.Store.Chat.on("change:unreadCount", (chat) =>
+                    emit("chat_unread", chat.id)
+                );
+
+                window.Store.Chat.on("remove", async (chat) =>
+                    emit("chat_remove", await window.WWebJS.getChatModel(chat))
+                );
+
+                window.Store.Chat.on(
+                    "change:archive",
+                    async (chat, curr, prev) =>
+                        emit(
+                            "chat_archive",
+                            await window.WWebJS.getChatModel(chat),
+                            curr,
+                            prev
+                        )
+                );
+
+                /* ---------- calls -------------------------------------------------- */
+                window.Store.Call.on("add", (call) =>
+                    emit("incoming_call", call)
+                );
+
+                /* ---------- poll votes -------------------------------------------- */
+                window.Store.PollVote.on("add", async (vote) => {
+                    const model = await window.WWebJS.getPollVoteModel(vote);
+                    if (model) emit("poll_vote", model);
+                });
+
+                /* ---------- reactions --------------------------------------------- */
+                const rt = window.Store.AddonReactionTable;
+                if (!rt.bulkUpsert.__wwebjsPatched) {
+                    const original = rt.bulkUpsert;
+                    rt.bulkUpsert = (...args) => {
+                        emit(
+                            "reaction",
+                            args[0].map((r) => ({
+                                ...r,
+                                msgKey: r.id,
+                                parentMsgKey: r.reactionParentKey,
+                                senderUserJid: (r.author ?? r.from)._serialized,
+                                timestamp: r.reactionTimestamp / 1000,
+                            }))
+                        );
+                        return original.apply(rt, args);
+                    };
+                    rt.bulkUpsert.__wwebjsPatched = true;
+                }
             });
-        } catch (err) {
-            console.error("WWebJS: Error during injection", err);
+
+            /***** 7.  Init interface / client info once *********************/
+            if (!this.info) {
+                this.info = new ClientInfo(
+                    this,
+                    await this.pupPage.evaluate(() => ({
+                        ...window.Store.Conn.serialize(),
+                        wid: window.Store.User.getMeUser(),
+                    }))
+                );
+                this.interface = new InterfaceController(this);
+                this.emit(Events.READY);
+                this.authStrategy.afterAuthReady();
+            }
         } finally {
             this.isInjecting = false;
         }
     }
+    /**************************************************************************/
 
     async grabFirstPage(browser) {
         const pages = await browser.pages();
