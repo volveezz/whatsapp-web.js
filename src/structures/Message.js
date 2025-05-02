@@ -738,7 +738,7 @@ class Message extends Base {
             filename: result.filename,
             mimetype: result.mimetype,
             filesize: result.filesize,
-            path: result.path,
+            path: `${result.path}.${mime.extension(result.mimetype) ?? ""}`,
         };
     }
 
