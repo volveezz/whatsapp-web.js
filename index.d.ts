@@ -2069,10 +2069,10 @@ declare namespace WAWebJS {
      */
     export type DownloadedMediaResult = {
         status: object;
-        filename?: string;
-        mimetype?: string;
-        filesize?: number;
-        path?: string;
+        filename: string;
+        mimetype: string;
+        filesize: number;
+        path: string;
     };
 }
 
