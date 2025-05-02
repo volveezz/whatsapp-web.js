@@ -1418,7 +1418,9 @@ class Client extends EventEmitter {
         const { message: newMessage, error } = await this.pupPage.evaluate(
             async (chatId, body, opts, seen) => {
                 const chatWid = window.Store.WidFactory.createWid(chatId);
-                const chat = window.Store.Chat.find(chatWid);
+                const chat =
+                    window.Store.Chat.get(chatWid) ||
+                    (await window.Store.Chat.find(chatWid));
                 if (!chat) throw new Error("Chat not found");
 
                 if (seen) void window.Store.SendSeen.sendSeen(chat, false);
@@ -1452,7 +1454,17 @@ class Client extends EventEmitter {
         return new Message(this, newMessage);
     }
 
-    async prepareMedia(filePath, uniqueId) {
+    /**
+     * Prepare a media file for sending.
+     * @param {string} filePath - The path to the media file.
+     * @param {string} uniqueId - A unique identifier for the media.
+     * @param {Object} options - Additional options.
+     * @param {boolean} [options.forceVoice=false] - Force the media to be sent as a voice message.
+     * @param {boolean} [options.forceDocument=false] - Force the media to be sent as a document.
+     * @param {boolean} [options.forceGif=false] - Force the media to be sent as a GIF.
+     * @returns {Promise<Object>}
+     */
+    async prepareMedia(filePath, uniqueId, options = {}) {
         const inputId = `wwebjs-upload-${uniqueId}`;
 
         await this.pupPage.evaluate((id) => {
@@ -1470,7 +1482,10 @@ class Client extends EventEmitter {
             const file = document.getElementById(id).files[0];
 
             try {
-                const data = await window.WWebJS.processMediaData(file, {});
+                const data = await window.WWebJS.processMediaData(
+                    file,
+                    options
+                );
                 if (!window.WWebJS.preparedMediaMap)
                     window.WWebJS.preparedMediaMap = {};
                 window.WWebJS.preparedMediaMap[id] = data;
