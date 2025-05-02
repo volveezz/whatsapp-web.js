@@ -7,6 +7,8 @@ const Order = require("./Order");
 const Payment = require("./Payment");
 const Reaction = require("./Reaction");
 const Contact = require("./Contact");
+const fs = require("fs/promises");
+const path = require("path");
 const { MessageTypes } = require("../util/Constants");
 
 /**
@@ -678,10 +680,9 @@ class Message extends Base {
                         signal: AbortSignal.timeout(60_000),
                     });
 
-                const buffer = await decryptedMedia.arrayBuffer();
                 return {
                     status,
-                    data: Array.from(new Uint8Array(buffer)),
+                    data: Array.from(decryptedMedia),
                     mimetype: msg.mimetype,
                     filename:
                         msg.filename || `${msg.type}_${msg.id._serialized}`,
