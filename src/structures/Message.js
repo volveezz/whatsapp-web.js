@@ -618,7 +618,7 @@ class Message extends Base {
 
     /**
      * Downloads and saves the attached media to disk
-     * @returns {Promise<string | undefined>} - Full path to the saved file or undefined on failure
+     * @returns {Promise<import('../../index').DownloadedMediaResult | undefined>} - Full result object or undefined on failure
      */
     async downloadAndSaveMedia() {
         if (!this.hasMedia) {

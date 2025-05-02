@@ -1075,10 +1075,7 @@ declare namespace WAWebJS {
         /** Downloads and returns the attached message media */
         downloadMedia: () => Promise<MessageMedia>;
         /** Downloads and saves the attached message media */
-        downloadAndSaveMedia: (
-            sessionId: string,
-            saveRootDir: string
-        ) => Promise<string>;
+        downloadAndSaveMedia: () => Promise<DownloadedMediaResult | undefined>;
         /** Returns the Chat this message was sent in */
         getChat: () => Promise<Chat>;
         /** Returns the Contact this message was sent from */
@@ -2065,6 +2062,17 @@ declare namespace WAWebJS {
         aggregateEmoji: string;
         hasReactionByMe: boolean;
         senders: Array<Reaction>;
+    };
+
+    /**
+     * The result of downloading and saving media from a message
+     */
+    export type DownloadedMediaResult = {
+        status: object;
+        filename?: string;
+        mimetype?: string;
+        filesize?: number;
+        path?: string;
     };
 }
 
