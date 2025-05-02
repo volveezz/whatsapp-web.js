@@ -19,6 +19,9 @@ declare namespace WAWebJS {
         /** Client interactivity interface */
         interface?: InterfaceController;
 
+        /** Puppeteer CDPSession */
+        cdpSession?: puppeteer.CDPSession;
+
         /**Accepts an invitation to join a group */
         acceptInvite(inviteCode: string): Promise<string>;
 
@@ -567,14 +570,6 @@ declare namespace WAWebJS {
         /** How many times should the qrcode be refreshed before giving up
          * @default 0 (disabled) */
         qrMaxRetries?: number;
-        /**
-         * @deprecated This option should be set directly on the LegacySessionAuth
-         */
-        restartOnAuthFail?: boolean;
-        /**
-         * @deprecated Only here for backwards-compatibility. You should move to using LocalAuth, or set the authStrategy to LegacySessionAuth explicitly.
-         */
-        session?: ClientSession;
         /** If another whatsapp web session is detected (another browser), take over the session in the current browser
          * @default false */
         takeoverOnConflict?: boolean;
@@ -591,6 +586,8 @@ declare namespace WAWebJS {
         proxyAuthentication?:
             | { username: string; password: string }
             | undefined;
+        /** Path to save downloaded files */
+        downloadPath?: string;
     }
 
     export interface LocalWebCacheOptions {

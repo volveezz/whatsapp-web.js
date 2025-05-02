@@ -617,12 +617,10 @@ class Message extends Base {
     }
 
     /**
-     * Downloads and saves the attached media to disk under a session-specific directory
-     * @param {string} sessionId - Unique identifier for session (used for folder path)
-     * @param {string} saveRootDir - Absolute root path where media files are stored
+     * Downloads and saves the attached media to disk
      * @returns {Promise<string | undefined>} - Full path to the saved file or undefined on failure
      */
-    async downloadAndSaveMedia(sessionId, saveRootDir) {
+    async downloadAndSaveMedia() {
         if (!this.hasMedia) {
             console.error(
                 "[DownloadMedia] Tried to download media from message without it"
@@ -631,7 +629,6 @@ class Message extends Base {
         }
 
         const result = await this.client.pupPage.evaluate(async (msgId) => {
-            const logs = [];
             const status = { ok: true };
 
             try {
@@ -643,7 +640,7 @@ class Message extends Base {
                 if (!msg?.mediaData?.mediaStage) {
                     console.log("[WAWEBJS] No media data found");
                     status.ok = false;
-                    return { status, logs };
+                    return { status };
                 }
 
                 if (msg.mediaData.mediaStage !== "RESOLVED") {
@@ -665,7 +662,7 @@ class Message extends Base {
                         console.log(
                             `mediaStage still not RESOLVED after retries: ${msg.mediaData.mediaStage}`
                         );
-                        return { status, logs };
+                        return { status };
                     }
                 }
 
@@ -680,44 +677,65 @@ class Message extends Base {
                         signal: AbortSignal.timeout(60_000),
                     });
 
+                const filename =
+                    msg.filename ||
+                    `ls_media-${(msg.id && msg.id.id) || Date.now()}`;
+                const mimetype = msg.mimetype || "application/octet-stream";
+                const filesize = msg.size;
+
+                // 1. Creating a Blob from the decrypted media
+                const blob = new Blob([decryptedMedia], { type: mimetype });
+
+                // 2. Creating an Object URL for that Blob
+                const url = URL.createObjectURL(blob);
+
+                // 3. Creating a temporary <a> element
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = filename;
+
+                // 4. Starting the download
+                document.body.appendChild(link);
+                link.click();
+
+                // 5. Cleaning up
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+
+                console.log(
+                    `[WAWEBJS EVAL] Download triggered for: ${filename}`
+                );
+
+                // Returning metadata to Node env
                 return {
                     status,
-                    data: Array.from(decryptedMedia),
-                    mimetype: msg.mimetype,
-                    filename:
-                        msg.filename || `${msg.type}_${msg.id._serialized}`,
-                    filesize: msg.size,
+                    filename,
+                    mimetype,
+                    filesize,
+                    path: `${this.client.options.downloadPath}/${filename}`,
                 };
             } catch (e) {
-                console.log(
+                console.error(
                     "[WAWEBJS] Exception during media download:",
                     e.message || e.toString()
                 );
                 status.ok = false;
-                return { status, logs };
+                return { status };
             }
         }, this.id._serialized);
 
-        if (!result?.status?.ok || !result?.data) {
+        if (!result?.status?.ok) {
             console.error("[DownloadMedia] Failed to download media");
             return;
         }
 
-        const sessionPath = path.join(saveRootDir, sessionId);
-        const filename = path.basename(
-            result.filename || `media_${Date.now()}`
-        );
-        const savePath = path.join(sessionPath, filename);
-
-        try {
-            await fs.mkdir(sessionPath, { recursive: true });
-            const buffer = Buffer.from(result.data);
-            await fs.writeFile(savePath, buffer);
-            return savePath;
-        } catch (e) {
-            console.error(`[DownloadMedia] Failed to save file: ${e.message}`);
-            return;
-        }
+        return {
+            status: result.status,
+            filename: result.filename,
+            mimetype: result.mimetype,
+            filesize: result.filesize,
+            path: result.path,
+        };
     }
 
     /**

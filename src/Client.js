@@ -457,6 +457,7 @@ class Client extends EventEmitter {
 
         this.pupBrowser = browser;
         this.pupPage = page;
+        this.cdpSession = await this.pupPage.createCDPSession();
 
         await this.authStrategy.afterBrowserInitialized();
         await this.initWebVersionCache();
@@ -506,12 +507,19 @@ class Client extends EventEmitter {
             }
         };
 
-        // If the session is already up we can disable immediately,
-        // otherwise wait for the READY event which signals a successful login.
+        // Disable auto-download flags on client start
         if (isAlreadyInitialized) {
-            await disableAutoDownloadFlags();
+            disableAutoDownloadFlags();
         } else {
             this.once(Events.READY, disableAutoDownloadFlags);
+        }
+
+        if (this.options.downloadPath && this.cdpSession) {
+            // Specifying the path for chrome to save files
+            await this.cdpSession.send("Page.setDownloadBehavior", {
+                behavior: "allow",
+                downloadPath: this.options.downloadPath,
+            });
         }
 
         this.pupPage.on("framenavigated", async (frame) => {
@@ -2369,10 +2377,12 @@ class Client extends EventEmitter {
     async setAutoDownloadAudio(flag) {
         await this.pupPage.evaluate(async (flag) => {
             const autoDownload = window.Store.Settings.getAutoDownloadAudio();
-            console.debug("Auto download audio", autoDownload, flag);
             if (autoDownload === flag) {
                 return flag;
             }
+
+            console.error("Updating auto download audio", autoDownload, flag);
+
             await window.Store.Settings.setAutoDownloadAudio(flag);
             return flag;
         }, flag);
@@ -2386,10 +2396,16 @@ class Client extends EventEmitter {
         await this.pupPage.evaluate(async (flag) => {
             const autoDownload =
                 window.Store.Settings.getAutoDownloadDocuments();
-            console.debug("Auto download documents", autoDownload, flag);
             if (autoDownload === flag) {
                 return flag;
             }
+
+            console.error(
+                "Updating auto download documents",
+                autoDownload,
+                flag
+            );
+
             await window.Store.Settings.setAutoDownloadDocuments(flag);
             return flag;
         }, flag);
@@ -2402,10 +2418,12 @@ class Client extends EventEmitter {
     async setAutoDownloadPhotos(flag) {
         await this.pupPage.evaluate(async (flag) => {
             const autoDownload = window.Store.Settings.getAutoDownloadPhotos();
-            console.debug("Auto download photos", autoDownload, flag);
             if (autoDownload === flag) {
                 return flag;
             }
+
+            console.error("Updating auto download photos", autoDownload, flag);
+
             await window.Store.Settings.setAutoDownloadPhotos(flag);
             return flag;
         }, flag);
@@ -2418,10 +2436,12 @@ class Client extends EventEmitter {
     async setAutoDownloadVideos(flag) {
         await this.pupPage.evaluate(async (flag) => {
             const autoDownload = window.Store.Settings.getAutoDownloadVideos();
-            console.debug("Auto download videos", autoDownload, flag);
             if (autoDownload === flag) {
                 return flag;
             }
+
+            console.error("Updating auto download videos", autoDownload, flag);
+
             await window.Store.Settings.setAutoDownloadVideos(flag);
             return flag;
         }, flag);
