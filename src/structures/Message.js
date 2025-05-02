@@ -702,7 +702,7 @@ class Message extends Base {
 
                     // 5. Cleaning up
                     document.body.removeChild(link);
-                    URL.revokeObjectURL(url);
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
 
                     console.log(
                         `[WAWEBJS EVAL] Download triggered for: ${filename}`
@@ -734,10 +734,10 @@ class Message extends Base {
             return;
         }
 
-        const extension =
-            result.mimetype === "image/jpeg"
-                ? "jpeg"
-                : mime.extension(result.mimetype) ?? "";
+        let extension = result.mimetype.split("/")[1];
+        if (extension.length > 4)
+            extension = mime.extension(result.mimetype) ?? "";
+        if (!extension) extension = "bin";
 
         return {
             status: result.status,
