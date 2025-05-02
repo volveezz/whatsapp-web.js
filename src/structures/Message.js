@@ -8,6 +8,7 @@ const Payment = require("./Payment");
 const Reaction = require("./Reaction");
 const Contact = require("./Contact");
 const { MessageTypes } = require("../util/Constants");
+const mime = require("mime-types");
 
 /**
  * Represents a Message on WhatsApp

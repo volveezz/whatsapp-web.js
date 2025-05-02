@@ -3,12 +3,12 @@
 /* Require Optional Dependencies */
 try {
     var fs = require("fs-extra");
-    var unzipper = require("unzipper");
     var archiver = require("archiver");
+    var tar = require("tar-fs");
 } catch {
     fs = undefined;
-    unzipper = undefined;
     archiver = undefined;
+    tar = undefined;
 }
 
 const path = require("path");
@@ -184,35 +184,35 @@ class RemoteAuth extends BaseAuthStrategy {
             await this.store.delete({ session: this.sessionName });
     }
 
+    /**
+     * Create a compressed session file
+     */
     async compressSession() {
-        const archive = archiver("zip");
-        const stream = fs.createWriteStream(`${this.sessionName}.zip`);
-
+        const archivePath = `${this.sessionName}.tar`;
         await fs.copy(this.userDataDir, this.tempDir).catch(() => {});
         await this.deleteMetadata();
-        return new Promise((resolve, reject) => {
-            archive
-                .directory(this.tempDir, false)
-                .on("error", (err) => reject(err))
-                .pipe(stream);
 
-            stream.on("close", () => resolve());
-            archive.finalize();
+        return new Promise((resolve, reject) => {
+            tar.pack(this.tempDir)
+                .on("error", reject)
+                .pipe(fs.createWriteStream(archivePath))
+                .on("error", reject)
+                .on("close", resolve);
         });
     }
 
+    /**
+     * Extract a compressed session file
+     * Streams the TAR straight into userDataDir, then deletes the file.
+     */
     async unCompressSession(compressedSessionPath) {
-        var stream = fs.createReadStream(compressedSessionPath);
         await new Promise((resolve, reject) => {
-            stream
-                .pipe(
-                    unzipper.Extract({
-                        path: this.userDataDir,
-                    })
-                )
-                .on("error", (err) => reject(err))
-                .on("finish", () => resolve());
+            fs.createReadStream(compressedSessionPath)
+                .pipe(tar.extract(this.userDataDir))
+                .on("error", reject)
+                .on("finish", resolve);
         });
+
         await fs.promises.unlink(compressedSessionPath);
     }
 
