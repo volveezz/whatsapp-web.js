@@ -734,12 +734,17 @@ class Message extends Base {
             return;
         }
 
+        const extension =
+            result.mimetype === "image/jpeg"
+                ? "jpeg"
+                : mime.extension(result.mimetype) ?? "";
+
         return {
             status: result.status,
             filename: result.filename,
             mimetype: result.mimetype,
             filesize: result.filesize,
-            path: `${result.path}.${mime.extension(result.mimetype) ?? ""}`,
+            path: `${result.path}.${extension}`,
         };
     }
 
