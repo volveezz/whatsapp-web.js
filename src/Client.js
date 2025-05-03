@@ -129,295 +129,6 @@ class Client extends EventEmitter {
      * Injection logic
      * Private function
      */
-    // async inject() {
-    //     if (this.isInjecting) {
-    //         console.warn("WWebJS: Injection already in progress, skipping");
-    //         return;
-    //     }
-    //     if (!this.pupPage || this.pupPage.isClosed()) {
-    //         console.warn(
-    //             "WWebJS: Injection attempted on closed page, skipping"
-    //         );
-    //         return;
-    //     }
-
-    //     this.isInjecting = true;
-
-    //     try {
-    //         const replaceBinding = async (name, fn) => {
-    //             const page = this.pupPage;
-
-    //             if (!page || page.isClosed()) {
-    //                 console.warn(
-    //                     `WWebJS replaceBinding: Page closed or invalid for '${name}'. Skipping.`
-    //                 );
-    //                 return;
-    //             }
-
-    //             // 1. Attempt to remove the existing binding
-    //             try {
-    //                 console.log(
-    //                     `WWebJS replaceBinding: Attempting removeExposedFunction for '${name}'...`
-    //                 );
-    //                 await page.removeExposedFunction(name);
-    //                 console.log(
-    //                     `WWebJS replaceBinding: Successfully removed (or confirmed absent) binding '${name}'.`
-    //                 );
-    //                 await new Promise((resolve) => setTimeout(resolve, 50));
-    //             } catch (removeErr) {
-    //                 if (!removeErr.message.includes("does not exist")) {
-    //                     console.error(
-    //                         `WWebJS replaceBinding: removeExposedFunction for '${name}' failed: ${removeErr.message}`
-    //                     );
-    //                 }
-    //             }
-
-    //             // 2. Expose the new function
-    //             try {
-    //                 console.log(
-    //                     `WWebJS replaceBinding: Attempting exposeFunction for '${name}'...`
-    //                 );
-    //                 await page.exposeFunction(name, fn);
-    //                 console.log(
-    //                     `WWebJS replaceBinding: Successfully exposed function '${name}'.`
-    //                 );
-    //             } catch (exposeErr) {
-    //                 console.error(
-    //                     `WWebJS replaceBinding: exposeFunction FAILED for '${name}' AFTER attempting removal: ${exposeErr.message}`
-    //                 );
-    //                 if (exposeErr.message.includes("already exists")) {
-    //                     console.error(
-    //                         `WWebJS replaceBinding: CRITICAL - '${name}' still exists after removeExposedFunction call. Possible race condition or browser state issue.`
-    //                     );
-    //                     try {
-    //                         await page.evaluate((n) => {
-    //                             delete window[n];
-    //                         }, name);
-    //                     } catch (e) {}
-    //                 }
-    //                 throw exposeErr;
-    //             }
-    //         };
-
-    //         // wait until Debug.VERSION shows up
-    //         await this.pupPage.waitForFunction(
-    //             "window.Debug?.VERSION !== undefined",
-    //             { timeout: this.options.authTimeoutMs }
-    //         );
-
-    //         const version = await this.getWWebVersion();
-
-    //         // inject core store–access helpers
-    //         await this.pupPage.evaluate(ExposeAuthStore);
-
-    //         // wait for AuthStore ready state
-    //         const needAuthentication = await this.pupPage.evaluate(async () => {
-    //             let state = window.AuthStore.AppState.state;
-    //             if (["OPENING", "UNLAUNCHED", "PAIRING"].includes(state)) {
-    //                 await new Promise((resolve) => {
-    //                     const watcher = (_s, st) => {
-    //                         if (
-    //                             !["OPENING", "UNLAUNCHED", "PAIRING"].includes(
-    //                                 st
-    //                             )
-    //                         ) {
-    //                             window.AuthStore.AppState.off(
-    //                                 "change:state",
-    //                                 watcher
-    //                             );
-    //                             resolve();
-    //                         }
-    //                     };
-    //                     window.AuthStore.AppState.on("change:state", watcher);
-    //                 });
-    //                 state = window.AuthStore.AppState.state;
-    //             }
-    //             return state === "UNPAIRED" || state === "UNPAIRED_IDLE";
-    //         });
-
-    //         if (needAuthentication) {
-    //             const { failed, failureEventPayload, restart } =
-    //                 await this.authStrategy.onAuthenticationNeeded();
-
-    //             if (failed) {
-    //                 /**
-    //                  * Emitted when there has been an error while trying to restore an existing session
-    //                  * @event Client#auth_failure
-    //                  * @param {string} message
-    //                  */
-    //                 this.emit(
-    //                     Events.AUTHENTICATION_FAILURE,
-    //                     failureEventPayload
-    //                 );
-    //                 await this.destroy();
-    //                 if (restart) {
-    //                     // session restore failed so try again but without session to force new authentication
-    //                     return this.initialize();
-    //                 }
-    //                 return;
-    //             }
-    //             // QR events
-    //             let qrRetries = 0;
-    //             await replaceBinding("onQRChangedEvent", async (qr) => {
-    //                 this.emit(Events.QR_RECEIVED, qr);
-    //                 if (
-    //                     this.options.qrMaxRetries > 0 &&
-    //                     ++qrRetries > this.options.qrMaxRetries
-    //                 ) {
-    //                     this.emit(
-    //                         Events.DISCONNECTED,
-    //                         "Max qrcode retries reached"
-    //                     );
-    //                     await this.destroy();
-    //                 }
-    //             });
-
-    //             await this.pupPage.evaluate(async () => {
-    //                 // build QR payload
-    //                 const reg =
-    //                     await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-    //                 const noise =
-    //                     await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-    //                 const staticKey = window.AuthStore.Base64Tools.encodeB64(
-    //                     noise.staticKeyPair.pubKey
-    //                 );
-    //                 const identityKey = window.AuthStore.Base64Tools.encodeB64(
-    //                     reg.identityKeyPair.pubKey
-    //                 );
-    //                 const advSecret =
-    //                     await window.AuthStore.RegistrationUtils.getADVSecretKey();
-    //                 const plat =
-    //                     window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
-    //                 const makeQR = (ref) =>
-    //                     `${ref},${staticKey},${identityKey},${advSecret},${plat}`;
-
-    //                 // initial + future
-    //                 window.onQRChangedEvent(makeQR(window.AuthStore.Conn.ref));
-    //                 window.AuthStore.Conn.off("change:ref");
-    //                 window.AuthStore.Conn.on("change:ref", (_, ref) => {
-    //                     window.onQRChangedEvent(makeQR(ref));
-    //                 });
-    //             });
-    //         }
-
-    //         // always replace these three bindings
-    //         await replaceBinding(
-    //             "onAuthAppStateChangedEvent",
-    //             async (state) => {
-    //                 if (state === "UNPAIRED_IDLE") {
-    //                     window.Store.Cmd.refreshQR();
-    //                 }
-    //             }
-    //         ).catch((e) =>
-    //             console.error(
-    //                 "Failed to replace binding for onAuthAppStateChangedEvent",
-    //                 e
-    //             )
-    //         );
-
-    //         await replaceBinding("onAppStateHasSyncedEvent", async () => {
-    //             const payload = await this.authStrategy.getAuthEventPayload();
-    //             this.emit(Events.AUTHENTICATED, payload);
-
-    //             // only inject Store/WWebJS once per session
-    //             const already = await this.pupPage.evaluate(
-    //                 () =>
-    //                     typeof window.Store !== "undefined" &&
-    //                     typeof window.WWebJS !== "undefined"
-    //             );
-    //             if (!already) {
-    //                 // optional local caching
-    //                 if (
-    //                     this.options.webVersionCache.type === "local" &&
-    //                     this.currentIndexHtml
-    //                 ) {
-    //                     const { type, ...opts } = this.options.webVersionCache;
-    //                     await WebCacheFactory.createWebCache(
-    //                         type,
-    //                         opts
-    //                     ).persist(this.currentIndexHtml, version);
-    //                 }
-    //                 await this.pupPage.evaluate(ExposeStore);
-
-    //                 // wait for Store
-    //                 await this.pupPage.waitForFunction(
-    //                     "window.Store !== undefined"
-    //                 );
-    //                 // set client info & interface
-    //                 this.info = new ClientInfo(
-    //                     this,
-    //                     await this.pupPage.evaluate(() => ({
-    //                         ...window.Store.Conn.serialize(),
-    //                         wid: window.Store.User.getMeUser(),
-    //                     }))
-    //                 );
-    //                 this.interface = new InterfaceController(this);
-    //                 await this.pupPage.evaluate(LoadUtils);
-    //                 await this.attachEventListeners();
-    //             }
-
-    //             this.emit(Events.READY);
-    //             this.authStrategy.afterAuthReady();
-    //         });
-
-    //         let lastPercent = null;
-    //         await replaceBinding(
-    //             "onOfflineProgressUpdateEvent",
-    //             async (percent) => {
-    //                 if (percent !== lastPercent) {
-    //                     lastPercent = percent;
-    //                     this.emit(Events.LOADING_SCREEN, percent);
-    //                 }
-    //             }
-    //         );
-
-    //         await replaceBinding("onLogoutEvent", async () => {
-    //             this.lastLoggedOut = true;
-    //             await this.pupPage
-    //                 .waitForNavigation({ waitUntil: "load", timeout: 5000 })
-    //                 .catch(() => {});
-    //         });
-
-    //         // sub to WA events
-    //         await this.pupPage.evaluate(() => {
-    //             if (window.__waEventSubsInjected) return;
-
-    //             window.AuthStore.AppState.on("change:state", (_s, st) =>
-    //                 window.onAuthAppStateChangedEvent(st)
-    //             );
-    //             window.AuthStore.AppState.on("change:hasSynced", () =>
-    //                 window.onAppStateHasSyncedEvent()
-    //             );
-    //             window.AuthStore.Cmd.on("offline_progress_update", () =>
-    //                 window.onOfflineProgressUpdateEvent(
-    //                     window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
-    //                 )
-    //             );
-    //             window.AuthStore.Cmd.on("logout", async () =>
-    //                 window.onLogoutEvent()
-    //             );
-
-    //             window.__waEventSubsInjected = true;
-    //         });
-    //     } catch (err) {
-    //         console.error("WWebJS: Error during injection", err);
-    //     } finally {
-    //         this.isInjecting = false;
-    //     }
-    // }
-    /**
-     * Inject WWebJS helpers and bind the single-bridge between the
-     * browser context and this Client instance.  Idempotent; can be
-     * called after every reconnect.
-     */
-    /**
-     * FULL drop-in inject() – single-bridge hot-restart + original wwebjs flow.
-     * Copy over your current method completely.
-     */
-    /**
-     * inject()  – battle-tested WA flow + single-bridge hot-restart
-     * Copy / replace your current method with this one.
-     */
     async inject() {
         if (this.isInjecting) return;
         if (!this.pupPage || this.pupPage.isClosed()) return;
@@ -480,7 +191,6 @@ class Client extends EventEmitter {
 
             /*──────────────── backend bridge ───────────────────────*/
             await replaceBinding("__wwebjs_bridge", async (evt, ...p) => {
-                let lastPercent = null;
                 try {
                     switch (evt) {
                         case "auth_state": {
@@ -539,8 +249,8 @@ class Client extends EventEmitter {
                             break;
                         }
                         case "offline_progress":
-                            if (p[0] !== lastPercent) {
-                                lastPercent = p[0];
+                            if (p[0] !== this._lastLoadingPercent) {
+                                this._lastLoadingPercent = p[0];
                                 this.emit(Events.LOADING_SCREEN, p[0]);
                             }
                             break;
@@ -580,13 +290,8 @@ class Client extends EventEmitter {
                 window.__wwebjs_q = [];
             });
 
-            /*──────── expose AuthStore (comet / legacy) ─────────────*/
-            if (comet) {
-                await this.pupPage.evaluate(ExposeAuthStore);
-            } else {
-                const mr = require("@pedroslopez/moduleraid").toString();
-                await this.pupPage.evaluate(ExposeLegacyAuthStore, mr);
-            }
+            /*──────── expose AuthStore (comet) ─────────────*/
+            await this.pupPage.evaluate(ExposeAuthStore);
 
             /*──────── need QR authentication? ───────────────────────*/
             const needAuth = await this.pupPage.evaluate(async () => {
@@ -716,6 +421,9 @@ class Client extends EventEmitter {
             );
 
             await this.pupPage.evaluate(() => {
+                if (window.__wwebjs_authHooksInstalled) return;
+                window.__wwebjs_authHooksInstalled = true;
+
                 window.AuthStore.AppState.on("change:state", (_s, st) =>
                     window.onAuthAppStateChangedEvent(st)
                 );
