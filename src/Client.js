@@ -173,8 +173,10 @@ class Client extends EventEmitter {
                     window.__wwebjs_ready = false;
                     window.__wwebjs_q = [];
                     window.__wwebjs_bridge = (...a) => {
+                        if (typeof window.__wwebjs_bridge !== 'function') return;
                         if (!window.__wwebjs_ready) return window.__wwebjs_q.push(a);
                     };
+
                     window.__wwebjs_emit = (...a) => window.__wwebjs_bridge(...a);
                 })();`;
                 await this.pupPage.evaluateOnNewDocument(preload);
