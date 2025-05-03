@@ -142,6 +142,18 @@ declare namespace WAWebJS {
         /** Force reset of connection state for the client */
         resetState(): Promise<void>;
 
+        /**
+         * Prepare a media file for sending.
+         * @param filePath The path to the media file.
+         * @param uniqueId A unique identifier for the media.
+         * @param options Additional options.
+         */
+        prepareMedia(
+            filePath: string,
+            uniqueId: string,
+            options?: MessageSendOptions
+        ): Promise<object>;
+
         /** Send a message to a specific chatId */
         sendMessage(
             chatId: string,
