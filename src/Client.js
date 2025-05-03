@@ -121,6 +121,8 @@ class Client extends EventEmitter {
         this.currentIndexHtml = null;
         this.lastLoggedOut = false;
         this.isInjecting = false;
+        this._storeInjected = false;
+        this._listenersAttached = false;
 
         Util.setFfmpegPath(this.options.ffmpegPath);
     }
@@ -188,8 +190,6 @@ class Client extends EventEmitter {
                 "window.Debug && window.Debug.VERSION",
                 { timeout: this.options.authTimeoutMs }
             );
-            const ver = await this.getWWebVersion();
-            const comet = Number(ver.split(".")[1]) >= 3000;
 
             /*──────────────── backend bridge ───────────────────────*/
             await replaceBinding("__wwebjs_bridge", async (evt, ...p) => {
@@ -263,12 +263,14 @@ class Client extends EventEmitter {
 
                         /* minimal examples of message / reaction */
                         case "msg_add":
+                            if (this._storeInjected) break;
                             const m = new Message(this, p[0]);
                             this.emit(Events.MESSAGE_CREATE, m);
                             if (!m.id.fromMe)
                                 this.emit(Events.MESSAGE_RECEIVED, m);
                             break;
                         case "reaction":
+                            if (this._storeInjected) break;
                             p[0].forEach((r) =>
                                 this.emit(
                                     Events.MESSAGE_REACTION,
@@ -633,6 +635,9 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        if (this._listenersAttached) return;
+        this._listenersAttached = true;
+
         await this.pupPage.waitForFunction(
             "!!window.Store && !!window.Store.Msg",
             {
