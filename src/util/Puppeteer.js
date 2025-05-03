@@ -7,12 +7,7 @@
  * @param {Function} fn - The function to expose.
  */
 async function exposeFunctionIfAbsent(page, name, fn) {
-    const exist = await page.evaluate((name) => {
-        return !!window[name];
-    }, name);
-    if (exist) {
-        return;
-    }
+    await page.removeExposedFunction(name).catch(() => {});
     await page.exposeFunction(name, fn);
 }
 
