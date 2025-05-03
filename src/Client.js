@@ -136,22 +136,6 @@ class Client extends EventEmitter {
         if (!this.pupPage || this.pupPage.isClosed()) return;
         this.isInjecting = true;
 
-        /* ---------- helper to (re)publish a binding ---------- */
-        const replaceBinding = async (name, fn) => {
-            if (typeof this.pupPage.removeExposedFunction === "function") {
-                await this.pupPage.removeExposedFunction(name).catch(() => {});
-            } else {
-                await this.pupPage
-                    .evaluate((n) => {
-                        try {
-                            delete window[n];
-                        } catch {}
-                    }, name)
-                    .catch(() => {});
-            }
-            await this.pupPage.exposeFunction(name, fn);
-        };
-
         try {
             /*───────────────── preload stub ─────────────────*/
             if (!this._bridgePreloaded) {
@@ -159,19 +143,22 @@ class Client extends EventEmitter {
                     if (window.__wwebjs_preload_done) return;
                     window.__wwebjs_preload_done = true;
 
+                    // Track last loading progress to prevent duplicate events
+                    window.__wwebjs_last_progress = -1;
+
+                    // Create placeholder functions to ensure they exist
                     [
                         "onOfflineProgressUpdateEvent",
                         "onAuthAppStateChangedEvent",
                         "onAppStateHasSyncedEvent",
                         "onLogoutEvent",
+                        "onQRChangedEvent",
                     ].forEach((fn) => {
-                        if (typeof window[fn] !== "function") {
-                            console.log(
-                                "Event is not a function, replacing with placeholder",
-                                fn
-                            );
-                            window[fn] = () => {};
-                        }
+                        window[fn] =
+                            window[fn] ||
+                            function () {
+                                console.log(`Placeholder for ${fn} called`);
+                            };
                     });
 
                     window.__wwebjs_ready = false;
@@ -196,16 +183,23 @@ class Client extends EventEmitter {
                 }
             );
 
-            await replaceBinding(
+            // Initialize tracking for last progress percentage
+            this._lastLoadingPercent = -1;
+
+            await exposeFunctionIfAbsent(
+                this.pupPage,
                 "onOfflineProgressUpdateEvent",
                 async (pct) => {
+                    // Only emit if percentage has changed
                     if (pct !== this._lastLoadingPercent) {
                         this._lastLoadingPercent = pct;
                         this.emit(Events.LOADING_SCREEN, pct);
                     }
                 }
             );
-            await replaceBinding(
+
+            await exposeFunctionIfAbsent(
+                this.pupPage,
                 "onAuthAppStateChangedEvent",
                 async (state) => {
                     if (state === "UNPAIRED_IDLE") {
@@ -216,53 +210,77 @@ class Client extends EventEmitter {
                     }
                 }
             );
-            await replaceBinding("onAppStateHasSyncedEvent", async () => {
-                await this.pupPage.evaluate(() =>
-                    window.__wwebjs_emit("auth_synced")
-                );
-            });
-            await replaceBinding("onLogoutEvent", async () => {
-                this.emit(Events.DISCONNECTED, "LOGOUT");
-                await this.destroy();
-            });
+
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                "onAppStateHasSyncedEvent",
+                async () => {
+                    await this.pupPage.evaluate(() =>
+                        window.__wwebjs_emit("auth_synced")
+                    );
+                }
+            );
+
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                "onLogoutEvent",
+                async () => {
+                    this.emit(Events.DISCONNECTED, "LOGOUT");
+                    await this.destroy();
+                }
+            );
 
             /* core bridge for everything else */
-            await replaceBinding("__wwebjs_bridge", async (evt, ...p) => {
-                try {
-                    switch (evt) {
-                        case "auth_state":
-                            this.emit(Events.STATE_CHANGED, p[0]);
-                            break;
-                        case "auth_synced":
-                            this.emit(
-                                Events.AUTHENTICATED,
-                                await this.authStrategy.getAuthEventPayload()
-                            );
-                            if (!this._storeInjected) {
-                                await this.pupPage.evaluate(ExposeStore);
-                                await this.pupPage.evaluate(LoadUtils);
-                                this.info = new ClientInfo(
-                                    this,
-                                    await this.pupPage.evaluate(() => ({
-                                        ...window.Store.Conn.serialize(),
-                                        wid: window.Store.User.getMeUser(),
-                                    }))
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                "__wwebjs_bridge",
+                async (evt, ...p) => {
+                    try {
+                        switch (evt) {
+                            case "auth_state":
+                                this.emit(Events.STATE_CHANGED, p[0]);
+                                break;
+                            case "auth_synced":
+                                this.emit(
+                                    Events.AUTHENTICATED,
+                                    await this.authStrategy.getAuthEventPayload()
                                 );
-                                this.interface = new InterfaceController(this);
-                                await this.attachEventListeners();
-                                this._storeInjected = true;
-                            }
-                            this.emit(Events.READY);
-                            this.authStrategy.afterAuthReady();
-                            break;
-                        case "offline_progress":
-                            this.emit(Events.LOADING_SCREEN, p[0]);
-                            break;
+                                if (!this._storeInjected) {
+                                    await this.pupPage.evaluate(ExposeStore);
+                                    await this.pupPage.evaluate(LoadUtils);
+                                    this.info = new ClientInfo(
+                                        this,
+                                        await this.pupPage.evaluate(() => ({
+                                            ...window.Store.Conn.serialize(),
+                                            wid: window.Store.User.getMeUser(),
+                                        }))
+                                    );
+                                    this.interface = new InterfaceController(
+                                        this
+                                    );
+                                    await this.attachEventListeners();
+                                    this._storeInjected = true;
+                                }
+                                this.emit(Events.READY);
+                                this.authStrategy.afterAuthReady();
+                                break;
+                            case "offline_progress":
+                                // Also check for duplicates here for the bridge event
+                                const progressPct = p[0];
+                                if (progressPct !== this._lastLoadingPercent) {
+                                    this._lastLoadingPercent = progressPct;
+                                    this.emit(
+                                        Events.LOADING_SCREEN,
+                                        progressPct
+                                    );
+                                }
+                                break;
+                        }
+                    } catch (err) {
+                        console.error("bridge", err);
                     }
-                } catch (err) {
-                    console.error("bridge", err);
                 }
-            });
+            );
 
             // ──────── flush queue ─────────
             await this.pupPage.evaluate(() => {
@@ -313,8 +331,10 @@ class Client extends EventEmitter {
                     return;
                 }
 
-                await replaceBinding("onQRChangedEvent", (qr) =>
-                    this.emit(Events.QR_RECEIVED, qr)
+                await exposeFunctionIfAbsent(
+                    this.pupPage,
+                    "onQRChangedEvent",
+                    (qr) => this.emit(Events.QR_RECEIVED, qr)
                 );
 
                 await this.pupPage.evaluate(() => {
@@ -334,10 +354,28 @@ class Client extends EventEmitter {
                         const ref = window.AuthStore.Conn.ref;
                         return `${ref},${sB64},${iB64},${adv},${plat}`;
                     };
-                    window.onQRChangedEvent(buildQR());
-                    window.AuthStore.Conn.on("change:ref", async (_c, r) =>
-                        window.onQRChangedEvent(await buildQR())
-                    );
+
+                    // Use a try-catch block to safely call the function
+                    const safeCallQREvent = async () => {
+                        try {
+                            const qrString = await buildQR();
+                            if (typeof window.onQRChangedEvent === "function") {
+                                window.onQRChangedEvent(qrString);
+                            } else {
+                                console.warn(
+                                    "onQRChangedEvent is not available yet"
+                                );
+                            }
+                        } catch (err) {
+                            console.error("Error generating QR:", err);
+                        }
+                    };
+
+                    safeCallQREvent();
+
+                    window.AuthStore.Conn.on("change:ref", async () => {
+                        safeCallQREvent();
+                    });
                 });
             }
 
@@ -348,18 +386,42 @@ class Client extends EventEmitter {
 
                 const { AppState, Cmd, OfflineMessageHandler } =
                     window.AuthStore;
+
+                // Safely wrap event emitters with checks
+                const safeEmit = (fnName, ...args) => {
+                    if (typeof window[fnName] === "function") {
+                        try {
+                            window[fnName](...args);
+                        } catch (err) {
+                            console.error(`Error calling ${fnName}:`, err);
+                        }
+                    } else {
+                        console.warn(`${fnName} is not available`);
+                    }
+                };
+
                 AppState.on("change:state", (_s, st) =>
-                    window.onAuthAppStateChangedEvent(st)
+                    safeEmit("onAuthAppStateChangedEvent", st)
                 );
                 AppState.on("change:hasSynced", () =>
-                    window.onAppStateHasSyncedEvent()
+                    safeEmit("onAppStateHasSyncedEvent")
                 );
-                Cmd.on("offline_progress_update", () =>
-                    window.onOfflineProgressUpdateEvent(
-                        OfflineMessageHandler.getOfflineDeliveryProgress()
-                    )
-                );
-                Cmd.on("logout", () => window.onLogoutEvent());
+
+                // Track last progress percentage in the browser context
+                window.__wwebjs_last_progress = -1;
+
+                Cmd.on("offline_progress_update", () => {
+                    const progress =
+                        OfflineMessageHandler.getOfflineDeliveryProgress();
+
+                    // Only emit if progress has changed
+                    if (progress !== window.__wwebjs_last_progress) {
+                        window.__wwebjs_last_progress = progress;
+                        safeEmit("onOfflineProgressUpdateEvent", progress);
+                    }
+                });
+
+                Cmd.on("logout", () => safeEmit("onLogoutEvent"));
             });
         } finally {
             this.isInjecting = false;
