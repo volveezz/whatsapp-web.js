@@ -264,8 +264,9 @@ class Client extends EventEmitter {
                 }
             });
 
-            /* mark bridge ready & flush queued events */
+            // ──────── flush queue ─────────
             await this.pupPage.evaluate(() => {
+                window.__wwebjs_emit = (...a) => window.__wwebjs_bridge(...a);
                 window.__wwebjs_ready = true;
                 (window.__wwebjs_q || []).forEach((args) =>
                     window.__wwebjs_bridge(...args)
