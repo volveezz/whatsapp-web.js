@@ -146,20 +146,49 @@ class Client extends EventEmitter {
                     // Track last loading progress to prevent duplicate events
                     window.__wwebjs_last_progress = -1;
 
-                    // Create placeholder functions to ensure they exist
-                    [
+                    // Create persistent placeholder functions that will survive page changes
+                    // Use a more resilient approach with Object.defineProperty to prevent overwriting
+                    const persistentFunctions = [
                         "onOfflineProgressUpdateEvent",
                         "onAuthAppStateChangedEvent",
                         "onAppStateHasSyncedEvent",
                         "onLogoutEvent",
                         "onQRChangedEvent",
-                    ].forEach((fn) => {
-                        window[fn] =
-                            window[fn] ||
-                            function () {
-                                console.log(`Placeholder for ${fn} called`);
-                            };
+                    ];
+
+                    persistentFunctions.forEach((fn) => {
+                        // Only define if it doesn't exist
+                        if (!window[fn]) {
+                            // Use a property descriptor to make it harder to accidentally overwrite
+                            Object.defineProperty(window, fn, {
+                                value: function (...args) {
+                                    console.log(
+                                        `Placeholder for ${fn} called with:`,
+                                        args
+                                    );
+                                },
+                                writable: true, // Allow code to redefine it
+                                configurable: false, // Prevent deletion
+                            });
+                        }
                     });
+
+                    // Add a recovery mechanism that periodically checks and restores these functions
+                    window.__wwebjs_check_functions = setInterval(() => {
+                        persistentFunctions.forEach((fn) => {
+                            if (typeof window[fn] !== "function") {
+                                console.warn(
+                                    `Function ${fn} was lost, restoring placeholder`
+                                );
+                                window[fn] = function (...args) {
+                                    console.log(
+                                        `Restored placeholder for ${fn} called with:`,
+                                        args
+                                    );
+                                };
+                            }
+                        });
+                    }, 300000); // Check every 5 minutes
 
                     window.__wwebjs_ready = false;
                     window.__wwebjs_q = [];
@@ -185,6 +214,37 @@ class Client extends EventEmitter {
 
             // Initialize tracking for last progress percentage
             this._lastLoadingPercent = -1;
+
+            // Modify the exposeFunctionIfAbsent implementation to be more robust
+            const exposeFunctionIfAbsent = async (page, name, fn) => {
+                return page
+                    .evaluate((name) => {
+                        return typeof window[name] === "function";
+                    }, name)
+                    .then((exists) => {
+                        if (!exists) {
+                            return page.exposeFunction(name, fn).then(() => {
+                                // After exposing, verify it worked
+                                return page.evaluate((name) => {
+                                    // Add a safety wrapper around the function
+                                    const originalFn = window[name];
+                                    window[name] = function (...args) {
+                                        try {
+                                            return originalFn.apply(this, args);
+                                        } catch (err) {
+                                            console.error(
+                                                `Error in ${name}:`,
+                                                err
+                                            );
+                                        }
+                                    };
+                                    return typeof window[name] === "function";
+                                }, name);
+                            });
+                        }
+                        return Promise.resolve(true);
+                    });
+            };
 
             await exposeFunctionIfAbsent(
                 this.pupPage,
@@ -387,41 +447,117 @@ class Client extends EventEmitter {
                 const { AppState, Cmd, OfflineMessageHandler } =
                     window.AuthStore;
 
-                // Safely wrap event emitters with checks
+                // Improved safeEmit with fallback mechanism
                 const safeEmit = (fnName, ...args) => {
                     if (typeof window[fnName] === "function") {
                         try {
                             window[fnName](...args);
                         } catch (err) {
                             console.error(`Error calling ${fnName}:`, err);
+                            // Attempt to restore function if it fails
+                            window[fnName] = function (...restoreArgs) {
+                                console.log(
+                                    `Restored ${fnName} called with:`,
+                                    restoreArgs
+                                );
+                            };
                         }
                     } else {
-                        console.warn(`${fnName} is not available`);
+                        console.warn(
+                            `${fnName} is not available, creating placeholder`
+                        );
+                        // Create a placeholder if missing
+                        window[fnName] = function (...restoreArgs) {
+                            console.log(
+                                `New placeholder for ${fnName} called with:`,
+                                restoreArgs
+                            );
+                        };
                     }
                 };
 
-                AppState.on("change:state", (_s, st) =>
-                    safeEmit("onAuthAppStateChangedEvent", st)
-                );
-                AppState.on("change:hasSynced", () =>
-                    safeEmit("onAppStateHasSyncedEvent")
-                );
+                // Use try-catch around all event listeners
+                try {
+                    AppState.on("change:state", (_s, st) => {
+                        try {
+                            safeEmit("onAuthAppStateChangedEvent", st);
+                        } catch (e) {
+                            console.error(
+                                "Error in AppState state change handler:",
+                                e
+                            );
+                        }
+                    });
+                } catch (e) {
+                    console.error(
+                        "Failed to set up AppState.on('change:state') listener:",
+                        e
+                    );
+                }
+
+                try {
+                    AppState.on("change:hasSynced", () => {
+                        try {
+                            safeEmit("onAppStateHasSyncedEvent");
+                        } catch (e) {
+                            console.error(
+                                "Error in AppState hasSynced change handler:",
+                                e
+                            );
+                        }
+                    });
+                } catch (e) {
+                    console.error(
+                        "Failed to set up AppState.on('change:hasSynced') listener:",
+                        e
+                    );
+                }
 
                 // Track last progress percentage in the browser context
                 window.__wwebjs_last_progress = -1;
 
-                Cmd.on("offline_progress_update", () => {
-                    const progress =
-                        OfflineMessageHandler.getOfflineDeliveryProgress();
+                try {
+                    Cmd.on("offline_progress_update", () => {
+                        try {
+                            const progress =
+                                OfflineMessageHandler.getOfflineDeliveryProgress();
 
-                    // Only emit if progress has changed
-                    if (progress !== window.__wwebjs_last_progress) {
-                        window.__wwebjs_last_progress = progress;
-                        safeEmit("onOfflineProgressUpdateEvent", progress);
-                    }
-                });
+                            // Only emit if progress has changed
+                            if (progress !== window.__wwebjs_last_progress) {
+                                window.__wwebjs_last_progress = progress;
+                                safeEmit(
+                                    "onOfflineProgressUpdateEvent",
+                                    progress
+                                );
+                            }
+                        } catch (e) {
+                            console.error(
+                                "Error in offline_progress_update handler:",
+                                e
+                            );
+                        }
+                    });
+                } catch (e) {
+                    console.error(
+                        "Failed to set up Cmd.on('offline_progress_update') listener:",
+                        e
+                    );
+                }
 
-                Cmd.on("logout", () => safeEmit("onLogoutEvent"));
+                try {
+                    Cmd.on("logout", () => {
+                        try {
+                            safeEmit("onLogoutEvent");
+                        } catch (e) {
+                            console.error("Error in logout handler:", e);
+                        }
+                    });
+                } catch (e) {
+                    console.error(
+                        "Failed to set up Cmd.on('logout') listener:",
+                        e
+                    );
+                }
             });
         } finally {
             this.isInjecting = false;
