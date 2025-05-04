@@ -167,7 +167,7 @@ class Client extends EventEmitter {
                                         args
                                     );
                                 },
-                                writable: true, // Allow code to redefine it
+                                writable: true, // Allow our code to redefine it later
                                 configurable: false, // Prevent deletion
                             });
                         }
@@ -214,37 +214,6 @@ class Client extends EventEmitter {
 
             // Initialize tracking for last progress percentage
             this._lastLoadingPercent = -1;
-
-            // Modify the exposeFunctionIfAbsent implementation to be more robust
-            const exposeFunctionIfAbsent = async (page, name, fn) => {
-                return page
-                    .evaluate((name) => {
-                        return typeof window[name] === "function";
-                    }, name)
-                    .then((exists) => {
-                        if (!exists) {
-                            return page.exposeFunction(name, fn).then(() => {
-                                // After exposing, verify it worked
-                                return page.evaluate((name) => {
-                                    // Add a safety wrapper around the function
-                                    const originalFn = window[name];
-                                    window[name] = function (...args) {
-                                        try {
-                                            return originalFn.apply(this, args);
-                                        } catch (err) {
-                                            console.error(
-                                                `Error in ${name}:`,
-                                                err
-                                            );
-                                        }
-                                    };
-                                    return typeof window[name] === "function";
-                                }, name);
-                            });
-                        }
-                        return Promise.resolve(true);
-                    });
-            };
 
             await exposeFunctionIfAbsent(
                 this.pupPage,
@@ -444,121 +413,233 @@ class Client extends EventEmitter {
                 if (window.__wwebjs_authHooksInstalled) return;
                 window.__wwebjs_authHooksInstalled = true;
 
-                const { AppState, Cmd, OfflineMessageHandler } =
-                    window.AuthStore;
+                // Add safety check to ensure AuthStore exists before accessing it
+                if (!window.AuthStore) {
+                    console.error(
+                        "AuthStore is undefined, cannot set up event hooks"
+                    );
 
-                // Improved safeEmit with fallback mechanism
-                const safeEmit = (fnName, ...args) => {
-                    if (typeof window[fnName] === "function") {
-                        try {
-                            window[fnName](...args);
-                        } catch (err) {
-                            console.error(`Error calling ${fnName}:`, err);
-                            // Attempt to restore function if it fails
-                            window[fnName] = function (...restoreArgs) {
-                                console.log(
-                                    `Restored ${fnName} called with:`,
-                                    restoreArgs
-                                );
-                            };
-                        }
-                    } else {
-                        console.warn(
-                            `${fnName} is not available, creating placeholder`
-                        );
-                        // Create a placeholder if missing
-                        window[fnName] = function (...restoreArgs) {
+                    // Create a periodic check to try setting up hooks when AuthStore becomes available
+                    window.__wwebjs_authstore_check = setInterval(() => {
+                        if (window.AuthStore) {
                             console.log(
-                                `New placeholder for ${fnName} called with:`,
-                                restoreArgs
+                                "AuthStore is now available, setting up hooks"
                             );
-                        };
-                    }
-                };
-
-                // Use try-catch around all event listeners
-                try {
-                    AppState.on("change:state", (_s, st) => {
-                        try {
-                            safeEmit("onAuthAppStateChangedEvent", st);
-                        } catch (e) {
-                            console.error(
-                                "Error in AppState state change handler:",
-                                e
-                            );
+                            clearInterval(window.__wwebjs_authstore_check);
+                            setupAuthHooks();
                         }
-                    });
-                } catch (e) {
-                    console.error(
-                        "Failed to set up AppState.on('change:state') listener:",
-                        e
-                    );
+                    }, 60000); // Check every minute
+
+                    return;
                 }
 
-                try {
-                    AppState.on("change:hasSynced", () => {
-                        try {
-                            safeEmit("onAppStateHasSyncedEvent");
-                        } catch (e) {
+                // Move the hook setup into a named function so we can call it later if needed
+                function setupAuthHooks() {
+                    try {
+                        const { AppState, Cmd, OfflineMessageHandler } =
+                            window.AuthStore || {};
+
+                        // Safety check for required objects
+                        if (!AppState) {
                             console.error(
-                                "Error in AppState hasSynced change handler:",
-                                e
+                                "AppState is undefined, cannot set up event hooks"
                             );
+                            return;
                         }
-                    });
-                } catch (e) {
-                    console.error(
-                        "Failed to set up AppState.on('change:hasSynced') listener:",
-                        e
-                    );
-                }
 
-                // Track last progress percentage in the browser context
-                window.__wwebjs_last_progress = -1;
+                        if (!Cmd) {
+                            console.error(
+                                "Cmd is undefined, cannot set up event hooks"
+                            );
+                            return;
+                        }
 
-                try {
-                    Cmd.on("offline_progress_update", () => {
-                        try {
-                            const progress =
-                                OfflineMessageHandler.getOfflineDeliveryProgress();
-
-                            // Only emit if progress has changed
-                            if (progress !== window.__wwebjs_last_progress) {
-                                window.__wwebjs_last_progress = progress;
-                                safeEmit(
-                                    "onOfflineProgressUpdateEvent",
-                                    progress
+                        // Improved safeEmit with fallback mechanism
+                        const safeEmit = (fnName, ...args) => {
+                            if (typeof window[fnName] === "function") {
+                                try {
+                                    window[fnName](...args);
+                                } catch (err) {
+                                    console.error(
+                                        `Error calling ${fnName}:`,
+                                        err
+                                    );
+                                    // Attempt to restore function if it fails
+                                    window[fnName] = function (...restoreArgs) {
+                                        console.log(
+                                            `Restored ${fnName} called with:`,
+                                            restoreArgs
+                                        );
+                                    };
+                                }
+                            } else {
+                                console.warn(
+                                    `${fnName} is not available, creating placeholder`
                                 );
+                                // Create a placeholder if missing
+                                window[fnName] = function (...restoreArgs) {
+                                    console.log(
+                                        `New placeholder for ${fnName} called with:`,
+                                        restoreArgs
+                                    );
+                                };
+                            }
+                        };
+
+                        // Use try-catch around all event listeners
+                        try {
+                            if (AppState && typeof AppState.on === "function") {
+                                AppState.on("change:state", (_s, st) => {
+                                    try {
+                                        safeEmit(
+                                            "onAuthAppStateChangedEvent",
+                                            st
+                                        );
+                                    } catch (e) {
+                                        console.error(
+                                            "Error in AppState state change handler:",
+                                            e
+                                        );
+                                    }
+                                });
                             }
                         } catch (e) {
                             console.error(
-                                "Error in offline_progress_update handler:",
+                                "Failed to set up AppState.on('change:state') listener:",
                                 e
                             );
                         }
-                    });
-                } catch (e) {
-                    console.error(
-                        "Failed to set up Cmd.on('offline_progress_update') listener:",
-                        e
-                    );
+
+                        try {
+                            if (AppState && typeof AppState.on === "function") {
+                                AppState.on("change:hasSynced", () => {
+                                    try {
+                                        safeEmit("onAppStateHasSyncedEvent");
+                                    } catch (e) {
+                                        console.error(
+                                            "Error in AppState hasSynced change handler:",
+                                            e
+                                        );
+                                    }
+                                });
+                            }
+                        } catch (e) {
+                            console.error(
+                                "Failed to set up AppState.on('change:hasSynced') listener:",
+                                e
+                            );
+                        }
+
+                        // Track last progress percentage in the browser context
+                        window.__wwebjs_last_progress = -1;
+
+                        try {
+                            if (
+                                Cmd &&
+                                typeof Cmd.on === "function" &&
+                                OfflineMessageHandler
+                            ) {
+                                Cmd.on("offline_progress_update", () => {
+                                    try {
+                                        const progress =
+                                            OfflineMessageHandler.getOfflineDeliveryProgress();
+
+                                        // Only emit if progress has changed
+                                        if (
+                                            progress !==
+                                            window.__wwebjs_last_progress
+                                        ) {
+                                            window.__wwebjs_last_progress =
+                                                progress;
+                                            safeEmit(
+                                                "onOfflineProgressUpdateEvent",
+                                                progress
+                                            );
+                                        }
+                                    } catch (e) {
+                                        console.error(
+                                            "Error in offline_progress_update handler:",
+                                            e
+                                        );
+                                    }
+                                });
+                            }
+                        } catch (e) {
+                            console.error(
+                                "Failed to set up Cmd.on('offline_progress_update') listener:",
+                                e
+                            );
+                        }
+
+                        try {
+                            if (Cmd && typeof Cmd.on === "function") {
+                                Cmd.on("logout", () => {
+                                    try {
+                                        safeEmit("onLogoutEvent");
+                                    } catch (e) {
+                                        console.error(
+                                            "Error in logout handler:",
+                                            e
+                                        );
+                                    }
+                                });
+                            }
+                        } catch (e) {
+                            console.error(
+                                "Failed to set up Cmd.on('logout') listener:",
+                                e
+                            );
+                        }
+                    } catch (outerError) {
+                        console.error(
+                            "Fatal error setting up auth hooks:",
+                            outerError
+                        );
+                    }
+                }
+
+                // Call the setup function immediately
+                setupAuthHooks();
+
+                // Also set up a periodic check to ensure hooks are still working
+                window.__wwebjs_hook_check = setInterval(() => {
+                    if (!window.AuthStore || !window.AuthStore.Cmd) {
+                        console.warn(
+                            "AuthStore or Cmd is missing, trying to re-setup hooks"
+                        );
+                        setupAuthHooks();
+                    }
+                }, 300000); // Check every 5 minutes
+            });
+
+            // Also add a periodic page-level check from the Node.js side
+            this._authStoreCheckInterval = setInterval(async () => {
+                if (!this.pupPage || this.pupPage.isClosed()) {
+                    clearInterval(this._authStoreCheckInterval);
+                    return;
                 }
 
                 try {
-                    Cmd.on("logout", () => {
-                        try {
-                            safeEmit("onLogoutEvent");
-                        } catch (e) {
-                            console.error("Error in logout handler:", e);
-                        }
+                    const authStoreExists = await this.pupPage.evaluate(() => {
+                        return !!window.AuthStore && !!window.AuthStore.Cmd;
                     });
-                } catch (e) {
-                    console.error(
-                        "Failed to set up Cmd.on('logout') listener:",
-                        e
-                    );
+
+                    if (!authStoreExists) {
+                        console.warn("AuthStore missing, re-exposing...");
+                        await this.pupPage.evaluate(ExposeAuthStore);
+
+                        // Try to reinstall hooks
+                        await this.pupPage.evaluate(() => {
+                            window.__wwebjs_authHooksInstalled = false;
+                            if (typeof setupAuthHooks === "function") {
+                                setupAuthHooks();
+                            }
+                        });
+                    }
+                } catch (err) {
+                    console.error("Error checking AuthStore:", err);
                 }
-            });
+            }, 600000); // Check every 10 minutes
         } finally {
             this.isInjecting = false;
         }
