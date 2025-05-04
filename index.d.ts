@@ -1379,6 +1379,7 @@ declare namespace WAWebJS {
 
     export type MessageContent =
         | string
+        | object
         | MessageMedia
         | Location
         | Poll
