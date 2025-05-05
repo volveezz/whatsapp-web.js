@@ -151,7 +151,11 @@ declare namespace WAWebJS {
         prepareMedia(
             filePath: string,
             uniqueId: string,
-            options?: MessageSendOptions
+            options?: {
+                forceVoice?: boolean;
+                forceDocument?: boolean;
+                forceGif?: boolean;
+            }
         ): Promise<object>;
 
         /** Send a message to a specific chatId */
