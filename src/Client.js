@@ -233,9 +233,19 @@ class Client extends EventEmitter {
                 async (state) => {
                     if (state === "UNPAIRED_IDLE") {
                         // refresh QR if phone unpaired itself
-                        await this.pupPage.evaluate(() =>
-                            window.Store.Cmd.refreshQR()
-                        );
+                        await this.pupPage.evaluate(() => {
+                            if (
+                                window.Store &&
+                                window.Store.Cmd &&
+                                typeof window.Store.Cmd.refreshQR === "function"
+                            ) {
+                                window.Store.Cmd.refreshQR();
+                            } else {
+                                console.warn(
+                                    "Cannot refresh QR: Store.Cmd is not available"
+                                );
+                            }
+                        });
                     }
                 }
             );
