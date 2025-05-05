@@ -705,7 +705,10 @@ class Message extends Base {
                     setTimeout(() => URL.revokeObjectURL(url), 1000);
 
                     console.log(
-                        `[WAWEBJS EVAL] Download triggered for: ${filename}`
+                        `[Evaluated/MediaDownloader] Download triggered for`,
+                        filename,
+                        mimetype,
+                        filesize
                     );
 
                     // Returning metadata to Node env
@@ -738,6 +741,17 @@ class Message extends Base {
         if (extension.length > 4)
             extension = mime.extension(result.mimetype) ?? "";
         if (!extension) extension = "bin";
+
+        if (extension === "oga") {
+            console.error(
+                "[DownloadMedia] Received incorrect extension for audio file",
+                {
+                    extension,
+                    result,
+                }
+            );
+            extension = "ogg";
+        }
 
         return {
             status: result.status,
