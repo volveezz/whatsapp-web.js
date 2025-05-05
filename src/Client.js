@@ -1719,21 +1719,25 @@ class Client extends EventEmitter {
         const input = await this.pupPage.$(`#${inputId}`);
         await input.uploadFile(filePath);
 
-        await this.pupPage.evaluate(async (id) => {
-            const file = document.getElementById(id).files[0];
+        await this.pupPage.evaluate(
+            async (id, options) => {
+                const file = document.getElementById(id).files[0];
 
-            try {
-                const data = await window.WWebJS.processMediaData(
-                    file,
-                    options
-                );
-                if (!window.WWebJS.preparedMediaMap)
-                    window.WWebJS.preparedMediaMap = {};
-                window.WWebJS.preparedMediaMap[id] = data;
-            } finally {
-                document.getElementById(id)?.remove();
-            }
-        }, inputId);
+                try {
+                    const data = await window.WWebJS.processMediaData(
+                        file,
+                        options
+                    );
+                    if (!window.WWebJS.preparedMediaMap)
+                        window.WWebJS.preparedMediaMap = {};
+                    window.WWebJS.preparedMediaMap[id] = data;
+                } finally {
+                    document.getElementById(id)?.remove();
+                }
+            },
+            inputId,
+            options
+        );
 
         return inputId;
     }
