@@ -479,18 +479,22 @@ exports.LoadUtils = () => {
                 ? mediaInfo
                 : window.WWebJS.mediaInfoToFile(mediaInfo);
 
+        console.log("Creating OpaqueData");
         const mData = await window.Store.OpaqueData.createFromData(
             file,
             file.type
         );
+        console.log("Creating MediaPrep");
         const mediaPrep = window.Store.MediaPrep.prepRawMedia(mData, {
             asDocument: forceDocument,
         });
+        console.log("Waiting for MediaPrep");
         const mediaData = await mediaPrep.waitForPrep();
+        console.log("Creating MediaObject");
         const mediaObject = window.Store.MediaObject.getOrCreateMediaObject(
             mediaData.filehash
         );
-
+        console.log("Creating MediaType");
         const mediaType = window.Store.MediaTypes.msgToMediaType({
             type: mediaData.type,
             isGif: mediaData.isGif,
@@ -518,16 +522,19 @@ exports.LoadUtils = () => {
             );
         }
 
+        console.log("Creating RenderableUrl");
         mediaData.renderableUrl = mediaData.mediaBlob.url();
         mediaObject.consolidate(mediaData.toJSON());
         mediaData.mediaBlob.autorelease();
 
+        console.log("Uploading Media");
         const uploadedMedia = await window.Store.MediaUpload.uploadMedia({
             mimetype: mediaData.mimetype,
             mediaObject,
             mediaType,
         });
 
+        console.log("Uploaded Media");
         const mediaEntry = uploadedMedia.mediaEntry;
         if (!mediaEntry) {
             throw new Error("upload failed: media entry was not created");
@@ -547,6 +554,7 @@ exports.LoadUtils = () => {
             firstFrameSidecar: mediaEntry.firstFrameSidecar,
         });
 
+        console.log("Returning MediaData");
         return mediaData;
     };
 

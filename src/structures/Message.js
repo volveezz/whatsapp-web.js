@@ -737,21 +737,12 @@ class Message extends Base {
             return;
         }
 
-        let extension = result.mimetype.split("/")[1];
-        if (extension.length > 4)
-            extension = mime.extension(result.mimetype) ?? "";
-        if (!extension) extension = "bin";
+        let extension =
+            (result.mimetype.match(/^[^/]+\/([^;]+)/) || [])[1] || "";
 
-        if (extension === "oga") {
-            console.error(
-                "[DownloadMedia] Received incorrect extension for audio file",
-                {
-                    extension,
-                    result,
-                }
-            );
-            extension = "ogg";
-        }
+        if (extension.length > 4) extension = mime.extension(mimetype) ?? "";
+
+        if (!extension) extension = "bin";
 
         return {
             status: result.status,
