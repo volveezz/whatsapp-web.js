@@ -68,20 +68,30 @@ exports.LoadUtils = () => {
     window.WWebJS.sendMessage = async (chat, content, options = {}) => {
         if (!chat) throw new Error("Missing chat");
 
-        /* ------------------------------------------------------------------ *
-         * 1. MEDIA HANDLING                                                  *
-         * ------------------------------------------------------------------ */
         let attOptions = {};
 
-        const isPreparedMedia =
-            content && typeof content === "object" && content.mediaKey;
-
-        if (isPreparedMedia) {
-            /* ---- already-prepared media passed as 2-nd arg ---------------- */
-            attOptions = { ...content };
-            attOptions.caption = options.caption; // allow caption override
-            attOptions.isViewOnce = options.isViewOnce;
-            content = attOptions.preview ?? ""; // stickers → empty body
+        /* ---- Check if content is an ID for prepared media ---- */
+        if (
+            typeof content === "string" &&
+            content.startsWith("wwebjs-upload-")
+        ) {
+            const inputId = content;
+            const mediaData = window.WWebJS.preparedMediaMap?.[inputId];
+            if (mediaData) {
+                console.log(`WWebJS: Found prepared media for ID: ${inputId}`);
+                attOptions = { ...mediaData };
+                content = attOptions.preview ?? "";
+                delete window.WWebJS.preparedMediaMap[inputId];
+                if (options.caption) {
+                    attOptions.caption = options.caption;
+                }
+                // Ensure isViewOnce is respected if passed with ID
+                if (options.isViewOnce) {
+                    attOptions.isViewOnce = true;
+                }
+            } else {
+                throw new Error(`Prepared media not found for ID: ${inputId}`);
+            }
         } else if (options.attachment) {
             /* ---- legacy raw attachment flow ------------------------------ */
             attOptions = options.sendMediaAsSticker

@@ -1598,24 +1598,14 @@ class Client extends EventEmitter {
                 ? options.mentions.map((c) => (c?.id ? c.id._serialized : c))
                 : [],
             extraOptions: options.extra,
-            preparedMedia: options.preparedMedia,
         };
 
-        /* ---------- prepared media passed as 2-nd arg ---------- */
-        const isPreparedMedia =
-            content && typeof content === "object" && content.mediaKey;
-
-        if (isPreparedMedia) {
-            if (options.caption) content.caption = options.caption;
-            internalOptions.preparedMedia = undefined;
-        }
-
         /* ---------- other input-types ---------- */
-        if (!isPreparedMedia && content instanceof MessageMedia) {
+        if (content instanceof MessageMedia) {
             internalOptions.attachment = content;
             internalOptions.isViewOnce = options.isViewOnce;
             content = "";
-        } else if (!isPreparedMedia && options.media instanceof MessageMedia) {
+        } else if (options.media instanceof MessageMedia) {
             internalOptions.attachment = options.media;
             internalOptions.caption = content;
             internalOptions.isViewOnce = options.isViewOnce;
@@ -1647,9 +1637,7 @@ class Client extends EventEmitter {
         /* ---------- sticker conversion ---------- */
         if (
             internalOptions.sendMediaAsSticker &&
-            internalOptions.attachment &&
-            !isPreparedMedia &&
-            !internalOptions.preparedMedia
+            internalOptions.attachment // Sticker conversion only happens if attachment was set above
         ) {
             internalOptions.attachment = await Util.formatToWebpSticker(
                 internalOptions.attachment,
@@ -1714,10 +1702,11 @@ class Client extends EventEmitter {
      * @param {boolean} [options.forceVoice=false] - Force the media to be sent as a voice message.
      * @param {boolean} [options.forceDocument=false] - Force the media to be sent as a document.
      * @param {boolean} [options.forceGif=false] - Force the media to be sent as a GIF.
-     * @returns {Promise<Object>}
+     * @returns {Promise<string>} The ID of the input element.
      */
     async prepareMedia(filePath, uniqueId, options = {}) {
-        const inputId = `wwebjs-upload-${uniqueId}`;
+        const sanitizedUniqueId = uniqueId.replace(/[^a-zA-Z0-9_]/g, "_");
+        const inputId = `wwebjs-upload-${sanitizedUniqueId}`;
 
         await this.pupPage.evaluate((id) => {
             const input = document.createElement("input");
@@ -1745,6 +1734,8 @@ class Client extends EventEmitter {
                 document.getElementById(id)?.remove();
             }
         }, inputId);
+
+        return inputId;
     }
 
     /**
