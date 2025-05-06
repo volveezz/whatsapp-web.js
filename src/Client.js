@@ -622,6 +622,10 @@ class Client extends EventEmitter {
                 }, 300000); // Check every 5 minutes
             });
 
+            if (this._authStoreCheckInterval) {
+                clearInterval(this._authStoreCheckInterval);
+            }
+
             // Also add a periodic page-level check from the Node.js side
             this._authStoreCheckInterval = setInterval(async () => {
                 if (!this.pupPage || this.pupPage.isClosed()) {
