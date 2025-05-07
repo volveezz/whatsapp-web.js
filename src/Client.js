@@ -1499,6 +1499,9 @@ class Client extends EventEmitter {
      * Closes the client
      */
     async destroy() {
+        if (this._authStoreCheckInterval) {
+            clearInterval(this._authStoreCheckInterval);
+        }
         const browserPid = this.pupBrowser?.process()?.pid;
         await this.pupBrowser?.close();
         await this.authStrategy?.destroy();
