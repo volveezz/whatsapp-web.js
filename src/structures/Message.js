@@ -744,12 +744,16 @@ class Message extends Base {
 
         if (!extension) extension = "bin";
 
+        const path = result.path.toLowerCase().endsWith(extension)
+            ? result.path
+            : `${result.path}.${extension}`;
+
         return {
             status: result.status,
             filename: result.filename,
             mimetype: result.mimetype,
             filesize: result.filesize,
-            path: `${result.path}.${extension}`,
+            path,
         };
     }
 
