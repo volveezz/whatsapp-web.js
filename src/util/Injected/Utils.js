@@ -528,11 +528,72 @@ exports.LoadUtils = () => {
         mediaData.mediaBlob.autorelease();
 
         console.log("Uploading Media");
-        const uploadedMedia = await window.Store.MediaUpload.uploadMedia({
-            mimetype: mediaData.mimetype,
-            mediaObject,
-            mediaType,
-        });
+
+        // Function to create a single upload attempt
+        const createUploadAttempt = () => {
+            return window.Store.MediaUpload.uploadMedia({
+                mimetype: mediaData.mimetype,
+                mediaObject,
+                mediaType,
+            });
+        };
+
+        // Handle upload with multiple retries over 120 seconds
+        const handleUploadWithRetries = async () => {
+            const startTime = Date.now();
+            const totalTimeout = 120000; // 120 seconds total
+            const retryInterval = 30000; // Try a new request every 30 seconds
+
+            // Create first upload attempt
+            let attempts = [createUploadAttempt()];
+
+            // Create a promise that resolves to the first successful upload
+            return new Promise((resolve, reject) => {
+                // Schedule new attempts every 30 seconds
+                const scheduleNextAttempt = () => {
+                    const elapsed = Date.now() - startTime;
+                    if (elapsed < totalTimeout - retryInterval) {
+                        const timeUntilNext =
+                            retryInterval - (elapsed % retryInterval);
+                        setTimeout(() => {
+                            console.log(
+                                `Creating new upload attempt after ${elapsed}ms`
+                            );
+                            attempts.push(createUploadAttempt());
+                        }, timeUntilNext);
+
+                        // Schedule the next attempt
+                        setTimeout(scheduleNextAttempt, timeUntilNext);
+                    }
+                };
+
+                // Start scheduling attempts
+                scheduleNextAttempt();
+
+                // Create a timeout that will reject after the total timeout
+                const timeoutId = setTimeout(() => {
+                    reject(
+                        new Error(
+                            "All upload attempts failed after 120 seconds"
+                        )
+                    );
+                }, totalTimeout);
+
+                // Use Promise.race to get the first completed upload
+                Promise.race(attempts)
+                    .then((result) => {
+                        clearTimeout(timeoutId);
+                        resolve(result);
+                    })
+                    .catch((error) => {
+                        clearTimeout(timeoutId);
+                        reject(error);
+                    });
+            });
+        };
+
+        // Attempt uploads with retry strategy
+        const uploadedMedia = await handleUploadWithRetries();
 
         console.log("Uploaded Media");
         const mediaEntry = uploadedMedia.mediaEntry;

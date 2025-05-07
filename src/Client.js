@@ -806,6 +806,8 @@ class Client extends EventEmitter {
                 console.log(
                     "[DEBUG] Page loaded/navigated, attempting injection..."
                 );
+                this._storeInjected = false;
+                this._listenersAttached = false;
                 await this.debouncedInject();
             } else if (alreadyInjected) {
                 console.log(
