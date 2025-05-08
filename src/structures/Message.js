@@ -622,13 +622,19 @@ class Message extends Base {
     async downloadAndSaveMedia() {
         if (!this.hasMedia) {
             console.error(
-                "[DownloadMedia] Tried to download media from message without it"
+                `[${
+                    this.client.clientId || "default"
+                }] [DownloadMedia] Tried to download media from message without it`
             );
             return;
         }
 
         const result = await this.client.pupPage.evaluate(
-            async (msgId, downloadPath) => {
+            async (msgId, downloadPath, clientId) => {
+                const _clientId = clientId || "default";
+                const logPrefix = `[${_clientId}] [WAWEBJS] [DownloadAndSaveMedia]:`;
+                console.log(`${logPrefix} Starting for msgId: ${msgId}`);
+
                 const status = { ok: true };
 
                 try {
@@ -637,35 +643,64 @@ class Message extends Base {
                         (await window.Store.Msg.getMessagesById([msgId]))
                             ?.messages?.[0];
 
-                    if (!msg?.mediaData?.mediaStage) {
-                        console.log("[WAWEBJS] No media data found");
+                    if (!msg) {
+                        console.error(
+                            `${logPrefix} Message not found for msgId: ${msgId}`
+                        );
                         status.ok = false;
                         return { status };
                     }
 
+                    if (!msg?.mediaData?.mediaStage) {
+                        console.warn(
+                            `${logPrefix} No mediaData or mediaStage found for msgId: ${msgId}`
+                        );
+                        status.ok = false;
+                        return { status };
+                    }
+                    console.log(
+                        `${logPrefix} Initial mediaStage: ${msg.mediaData.mediaStage}`
+                    );
+
                     if (msg.mediaData.mediaStage !== "RESOLVED") {
+                        console.log(
+                            `${logPrefix} Media not resolved. Calling msg.downloadMedia().`
+                        );
                         await msg.downloadMedia({
                             downloadEvenIfExpensive: true,
                             rmrReason: 1,
                         });
 
                         let tries = 0;
+                        console.log(
+                            `${logPrefix} Waiting for mediaStage to be RESOLVED.`
+                        );
                         while (
                             msg.mediaData.mediaStage !== "RESOLVED" &&
                             !msg.mediaData.mediaStage.includes("ERROR") &&
                             tries++ < 10
                         ) {
+                            console.log(
+                                `${logPrefix} Retry ${tries}: mediaStage is ${msg.mediaData.mediaStage}. Waiting 300ms.`
+                            );
                             await new Promise((res) => setTimeout(res, 300));
                         }
 
+                        console.log(
+                            `${logPrefix} After retry loop, mediaStage: ${msg.mediaData.mediaStage}`
+                        );
                         if (msg.mediaData.mediaStage !== "RESOLVED") {
-                            console.log(
-                                `mediaStage still not RESOLVED after retries: ${msg.mediaData.mediaStage}`
+                            console.error(
+                                `${logPrefix} mediaStage still not RESOLVED after retries: ${msg.mediaData.mediaStage}`
                             );
+                            status.ok = false;
                             return { status };
                         }
                     }
 
+                    console.log(
+                        `${logPrefix} Proceeding to DownloadManager.downloadAndMaybeDecrypt.`
+                    );
                     const decryptedMedia =
                         await window.Store.DownloadManager.downloadAndMaybeDecrypt(
                             {
@@ -678,6 +713,9 @@ class Message extends Base {
                                 signal: AbortSignal.timeout(60_000),
                             }
                         );
+                    console.log(
+                        `${logPrefix} Media decrypted. Size: ${decryptedMedia?.byteLength}`
+                    );
 
                     const filename =
                         msg.filename ||
@@ -685,33 +723,43 @@ class Message extends Base {
                     const mimetype = msg.mimetype || "application/octet-stream";
                     const filesize = msg.size;
 
-                    // 1. Creating a Blob from the decrypted media
+                    console.log(
+                        `${logPrefix} Creating Blob and Object URL for: ${filename}, type: ${mimetype}.`
+                    );
                     const blob = new Blob([decryptedMedia], { type: mimetype });
-
-                    // 2. Creating an Object URL for that Blob
                     const url = URL.createObjectURL(blob);
+                    console.log(
+                        `${logPrefix} Object URL created: ${
+                            url ? "success" : "failure"
+                        }.`
+                    );
 
-                    // 3. Creating a temporary <a> element
                     const link = document.createElement("a");
                     link.href = url;
                     link.download = filename;
 
-                    // 4. Starting the download
+                    console.log(
+                        `${logPrefix} Appending link to body and clicking.`
+                    );
                     document.body.appendChild(link);
                     link.click();
+                    console.log(`${logPrefix} Link clicked.`);
 
-                    // 5. Cleaning up
                     document.body.removeChild(link);
-                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    console.log(
+                        `${logPrefix} Link removed. Setting timeout to revoke Object URL.`
+                    );
+                    setTimeout(() => {
+                        URL.revokeObjectURL(url);
+                        console.log(
+                            `${logPrefix} Object URL revoked for: ${filename}`
+                        );
+                    }, 1000);
 
                     console.log(
-                        `[Evaluated/MediaDownloader] Download triggered for`,
-                        filename,
-                        mimetype,
-                        filesize
+                        `${logPrefix} Download triggered successfully for: ${filename}`
                     );
 
-                    // Returning metadata to Node env
                     return {
                         status,
                         filename,
@@ -721,19 +769,25 @@ class Message extends Base {
                     };
                 } catch (e) {
                     console.error(
-                        "[WAWEBJS] Exception during media download:",
-                        e.message || e.toString()
+                        `${logPrefix} Exception during media download:`,
+                        e.message || e.toString(),
+                        e.stack
                     );
                     status.ok = false;
                     return { status };
                 }
             },
             this.id._serialized,
-            this.client.options.downloadPath
+            this.client.options.downloadPath,
+            this.client.clientId
         );
 
         if (!result?.status?.ok) {
-            console.error("[DownloadMedia] Failed to download media");
+            console.error(
+                `[${
+                    this.client.clientId || "default"
+                }] [DownloadMedia] Failed to download media after evaluate.`
+            );
             return;
         }
 

@@ -43,14 +43,15 @@ const { debounce } = require("./util/debounce");
  * SendMessageError represents an error that occurred during message sending
  */
 class SendMessageError extends Error {
-    constructor({ name, message, stack, code, media, chatId }) {
-        super(`[${name}] ${message}`);
+    constructor({ name, message, stack, code, media, chatId, clientId }) {
+        super(`[${clientId || "default"}] [${name}] ${message}`);
         this.name = "SendMessageError";
         this.original = name;
         this.code = code;
         this.media = media;
         this.chatId = chatId;
         this.stack = stack;
+        this.clientId = clientId;
     }
 }
 
@@ -98,6 +99,7 @@ class Client extends EventEmitter {
         super();
 
         this.options = Util.mergeDefault(DefaultOptions, options);
+        this.clientId = this.options.clientId || "default";
 
         if (!this.options.authStrategy) {
             this.authStrategy = new NoAuth();
@@ -163,7 +165,9 @@ class Client extends EventEmitter {
                             Object.defineProperty(window, fn, {
                                 value: function (...args) {
                                     console.log(
-                                        `Placeholder for ${fn} called with:`,
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Placeholder for ${fn} called with:`,
                                         args
                                     );
                                 },
@@ -178,11 +182,15 @@ class Client extends EventEmitter {
                         persistentFunctions.forEach((fn) => {
                             if (typeof window[fn] !== "function") {
                                 console.warn(
-                                    `Function ${fn} was lost, restoring placeholder`
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] Function ${fn} was lost, restoring placeholder`
                                 );
                                 window[fn] = function (...args) {
                                     console.log(
-                                        `Restored placeholder for ${fn} called with:`,
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Restored placeholder for ${fn} called with:`,
                                         args
                                     );
                                 };
@@ -227,6 +235,11 @@ class Client extends EventEmitter {
                 }
             );
 
+            // Expose clientId to the browser context for in-page script logging
+            await this.pupPage.evaluate((id) => {
+                window.wwebjs_client_id = id;
+            }, this.clientId);
+
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 "onAuthAppStateChangedEvent",
@@ -242,7 +255,9 @@ class Client extends EventEmitter {
                                 window.Store.Cmd.refreshQR();
                             } else {
                                 console.warn(
-                                    "Cannot refresh QR: Store.Cmd is not available"
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] Cannot refresh QR: Store.Cmd is not available`
                                 );
                             }
                         });
@@ -316,7 +331,7 @@ class Client extends EventEmitter {
                                 break;
                         }
                     } catch (err) {
-                        console.error("bridge", err);
+                        console.error(`[${this.clientId}] bridge`, err);
                     }
                 }
             );
@@ -402,11 +417,18 @@ class Client extends EventEmitter {
                                 window.onQRChangedEvent(qrString);
                             } else {
                                 console.warn(
-                                    "onQRChangedEvent is not available yet"
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] onQRChangedEvent is not available yet`
                                 );
                             }
                         } catch (err) {
-                            console.error("Error generating QR:", err);
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Error generating QR:`,
+                                err
+                            );
                         }
                     };
 
@@ -426,14 +448,18 @@ class Client extends EventEmitter {
                 // Add safety check to ensure AuthStore exists before accessing it
                 if (!window.AuthStore) {
                     console.error(
-                        "AuthStore is undefined, cannot set up event hooks"
+                        `[${
+                            window.wwebjs_client_id || "default"
+                        }] AuthStore is undefined, cannot set up event hooks`
                     );
 
                     // Create a periodic check to try setting up hooks when AuthStore becomes available
                     window.__wwebjs_authstore_check = setInterval(() => {
                         if (window.AuthStore) {
                             console.log(
-                                "AuthStore is now available, setting up hooks"
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] AuthStore is now available, setting up hooks`
                             );
                             clearInterval(window.__wwebjs_authstore_check);
                             setupAuthHooks();
@@ -452,14 +478,18 @@ class Client extends EventEmitter {
                         // Safety check for required objects
                         if (!AppState) {
                             console.error(
-                                "AppState is undefined, cannot set up event hooks"
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] AppState is undefined, cannot set up event hooks`
                             );
                             return;
                         }
 
                         if (!Cmd) {
                             console.error(
-                                "Cmd is undefined, cannot set up event hooks"
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Cmd is undefined, cannot set up event hooks`
                             );
                             return;
                         }
@@ -471,25 +501,34 @@ class Client extends EventEmitter {
                                     window[fnName](...args);
                                 } catch (err) {
                                     console.error(
-                                        `Error calling ${fnName}:`,
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Error calling ${fnName}:`,
                                         err
                                     );
                                     // Attempt to restore function if it fails
                                     window[fnName] = function (...restoreArgs) {
                                         console.log(
-                                            `Restored ${fnName} called with:`,
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Restored ${fnName} called with:`,
                                             restoreArgs
                                         );
                                     };
                                 }
                             } else {
                                 console.warn(
-                                    `${fnName} is not available, creating placeholder`
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] ${fnName} is not available, creating placeholder`
                                 );
                                 // Create a placeholder if missing
                                 window[fnName] = function (...restoreArgs) {
                                     console.log(
-                                        `New placeholder for ${fnName} called with:`,
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] New placeholder for ${fnName} called with:`,
                                         restoreArgs
                                     );
                                 };
@@ -507,7 +546,10 @@ class Client extends EventEmitter {
                                         );
                                     } catch (e) {
                                         console.error(
-                                            "Error in AppState state change handler:",
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Error in AppState state change handler:`,
                                             e
                                         );
                                     }
@@ -515,7 +557,9 @@ class Client extends EventEmitter {
                             }
                         } catch (e) {
                             console.error(
-                                "Failed to set up AppState.on('change:state') listener:",
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Failed to set up AppState.on('change:state') listener:`,
                                 e
                             );
                         }
@@ -527,7 +571,10 @@ class Client extends EventEmitter {
                                         safeEmit("onAppStateHasSyncedEvent");
                                     } catch (e) {
                                         console.error(
-                                            "Error in AppState hasSynced change handler:",
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Error in AppState hasSynced change handler:`,
                                             e
                                         );
                                     }
@@ -535,7 +582,9 @@ class Client extends EventEmitter {
                             }
                         } catch (e) {
                             console.error(
-                                "Failed to set up AppState.on('change:hasSynced') listener:",
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Failed to set up AppState.on('change:hasSynced') listener:`,
                                 e
                             );
                         }
@@ -568,7 +617,10 @@ class Client extends EventEmitter {
                                         }
                                     } catch (e) {
                                         console.error(
-                                            "Error in offline_progress_update handler:",
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Error in offline_progress_update handler:`,
                                             e
                                         );
                                     }
@@ -576,7 +628,9 @@ class Client extends EventEmitter {
                             }
                         } catch (e) {
                             console.error(
-                                "Failed to set up Cmd.on('offline_progress_update') listener:",
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Failed to set up Cmd.on('offline_progress_update') listener:`,
                                 e
                             );
                         }
@@ -588,7 +642,10 @@ class Client extends EventEmitter {
                                         safeEmit("onLogoutEvent");
                                     } catch (e) {
                                         console.error(
-                                            "Error in logout handler:",
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Error in logout handler:`,
                                             e
                                         );
                                     }
@@ -596,13 +653,17 @@ class Client extends EventEmitter {
                             }
                         } catch (e) {
                             console.error(
-                                "Failed to set up Cmd.on('logout') listener:",
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Failed to set up Cmd.on('logout') listener:`,
                                 e
                             );
                         }
                     } catch (outerError) {
                         console.error(
-                            "Fatal error setting up auth hooks:",
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] Fatal error setting up auth hooks:`,
                             outerError
                         );
                     }
@@ -615,7 +676,9 @@ class Client extends EventEmitter {
                 window.__wwebjs_hook_check = setInterval(() => {
                     if (!window.AuthStore || !window.AuthStore.Cmd) {
                         console.warn(
-                            "AuthStore or Cmd is missing, trying to re-setup hooks"
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] AuthStore or Cmd is missing, trying to re-setup hooks`
                         );
                         setupAuthHooks();
                     }
@@ -639,19 +702,25 @@ class Client extends EventEmitter {
                     });
 
                     if (!authStoreExists) {
-                        console.warn("AuthStore missing, re-exposing...");
+                        console.warn(
+                            `[${this.clientId}] AuthStore missing, re-exposing...`
+                        );
                         await this.pupPage.evaluate(ExposeAuthStore);
 
                         // Try to reinstall hooks
-                        await this.pupPage.evaluate(() => {
+                        await this.pupPage.evaluate((id) => {
+                            window.wwebjs_client_id = id; // Ensure client_id is available for subsequent browser-side logs
                             window.__wwebjs_authHooksInstalled = false;
                             if (typeof setupAuthHooks === "function") {
                                 setupAuthHooks();
                             }
-                        });
+                        }, this.clientId);
                     }
                 } catch (err) {
-                    console.error("Error checking AuthStore:", err);
+                    console.error(
+                        `[${this.clientId}] Error checking AuthStore:`,
+                        err
+                    );
                 }
             }, 600000); // Check every 10 minutes
         } finally {
@@ -756,7 +825,7 @@ class Client extends EventEmitter {
                 await this.setAutoDownloadVideos(false);
             } catch (err) {
                 console.warn(
-                    "[WWebJS] Failed to auto-disable auto-download flags:",
+                    `[${this.clientId}] [WWebJS] Failed to auto-disable auto-download flags:`,
                     err?.message || err
                 );
             }
@@ -804,18 +873,20 @@ class Client extends EventEmitter {
                 frame.url().startsWith(WhatsWebURL)
             ) {
                 console.log(
-                    "[DEBUG] Page loaded/navigated, attempting injection..."
+                    `[${this.clientId}] [DEBUG] Page loaded/navigated, attempting injection...`
                 );
                 this._storeInjected = false;
                 this._listenersAttached = false;
                 await this.debouncedInject();
             } else if (alreadyInjected) {
                 console.log(
-                    "[DEBUG] Page loaded/navigated, WWebJS already injected, skipping inject()."
+                    `[${this.clientId}] [DEBUG] Page loaded/navigated, WWebJS already injected, skipping inject().`
                 );
             } else {
                 console.log(
-                    `[DEBUG] Page navigated, but not injecting. URL: ${frame.url()}, Closed: ${this.pupPage?.isClosed()}, Injected: ${alreadyInjected}`
+                    `[${
+                        this.clientId
+                    }] [DEBUG] Page navigated, but not injecting. URL: ${frame.url()}, Closed: ${this.pupPage?.isClosed()}, Injected: ${alreadyInjected}`
                 );
             }
         });
@@ -879,7 +950,9 @@ class Client extends EventEmitter {
                             emitter.off(evt, handler);
                         } catch (e) {
                             console.warn(
-                                `WWebJS: Failed to remove listener for ${storeName}.${evt}`,
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] WWebJS: Failed to remove listener for ${storeName}.${evt}`,
                                 e
                             );
                         }
@@ -894,23 +967,31 @@ class Client extends EventEmitter {
                 .forEach((k) => {
                     if (window.hasOwnProperty(k)) {
                         console.log(
-                            `WWebJS Cleanup: Attempting to clear old binding: ${k}`
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] WWebJS Cleanup: Attempting to clear old binding: ${k}`
                         );
                         try {
                             window[k] = null;
                             delete window[k];
                             if (window.hasOwnProperty(k)) {
                                 console.error(
-                                    `WWebJS Cleanup: ${k} STILL EXISTS after delete attempt`
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] WWebJS Cleanup: ${k} STILL EXISTS after delete attempt`
                                 );
                             } else {
                                 console.log(
-                                    `WWebJS Cleanup: Cleared ${k} successfully.`
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] WWebJS Cleanup: Cleared ${k} successfully.`
                                 );
                             }
                         } catch (e) {
                             console.error(
-                                `WWebJS Cleanup: FAILED to clear ${k}:`,
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] WWebJS Cleanup: FAILED to clear ${k}:`,
                                 e.message
                             );
                         }
@@ -1526,7 +1607,7 @@ class Client extends EventEmitter {
             })
             .catch((e) =>
                 console.error(
-                    "Received an error when tried to logout from the session",
+                    `[${this.clientId}] Received an error when tried to logout from the session`,
                     e
                 )
             );
@@ -1706,8 +1787,12 @@ class Client extends EventEmitter {
         );
 
         if (error) {
-            console.error(`Failed to send message to`, chatId, error);
-            throw new SendMessageError(error);
+            console.error(
+                `[${this.clientId}] Failed to send message to`,
+                chatId,
+                error
+            );
+            throw new SendMessageError({ ...error, clientId: this.clientId });
         }
 
         return new Message(this, newMessage);
@@ -2098,7 +2183,7 @@ class Client extends EventEmitter {
     async getProfilePicUrl(contactId) {
         if (!this.pupPage || this.pupPage.isClosed()) {
             console.warn(
-                "[getProfilePicUrl] Page is closed or undefined. Skipping."
+                `[${this.clientId}] [getProfilePicUrl] Page is closed or undefined. Skipping.`
             );
             return undefined;
         }
@@ -2639,7 +2724,13 @@ class Client extends EventEmitter {
                 return flag;
             }
 
-            console.error("Updating auto download audio", autoDownload, flag);
+            console.error(
+                `[${
+                    window.wwebjs_client_id || "default"
+                }] Updating auto download audio`,
+                autoDownload,
+                flag
+            );
 
             await window.Store.Settings.setAutoDownloadAudio(flag);
             return flag;
@@ -2659,7 +2750,9 @@ class Client extends EventEmitter {
             }
 
             console.error(
-                "Updating auto download documents",
+                `[${
+                    window.wwebjs_client_id || "default"
+                }] Updating auto download documents`,
                 autoDownload,
                 flag
             );
@@ -2680,7 +2773,13 @@ class Client extends EventEmitter {
                 return flag;
             }
 
-            console.error("Updating auto download photos", autoDownload, flag);
+            console.error(
+                `[${
+                    window.wwebjs_client_id || "default"
+                }] Updating auto download photos`,
+                autoDownload,
+                flag
+            );
 
             await window.Store.Settings.setAutoDownloadPhotos(flag);
             return flag;
@@ -2698,7 +2797,13 @@ class Client extends EventEmitter {
                 return flag;
             }
 
-            console.error("Updating auto download videos", autoDownload, flag);
+            console.error(
+                `[${
+                    window.wwebjs_client_id || "default"
+                }] Updating auto download videos`,
+                autoDownload,
+                flag
+            );
 
             await window.Store.Settings.setAutoDownloadVideos(flag);
             return flag;
@@ -2754,77 +2859,160 @@ class Client extends EventEmitter {
     async reinitializeCryptoStore() {
         if (!this.pupPage || this.pupPage.isClosed()) {
             console.warn(
-                "[reinitializeCryptoStore] Page is closed or undefined. Skipping."
+                `[${this.clientId}] [reinitializeCryptoStore] Page is closed or undefined. Skipping.`
             );
             return;
         }
 
-        await this.pupPage?.evaluate(async () => {
-            // Wait for CryptoLib to load
-            function waitForCryptoLib(maxRetries = 30, interval = 500) {
-                return new Promise((resolve, reject) => {
-                    let retries = 0;
-                    const check = () => {
-                        if (window.Store?.CryptoLib) return resolve();
-                        if (retries++ >= maxRetries)
-                            return reject("CryptoLib not found");
-                        setTimeout(check, interval);
-                    };
-                    check();
-                });
-            }
+        await this.pupPage?.evaluate(
+            async (clientId, CIPHERTEXT_TYPE_VALUE) => {
+                // Wait for CryptoLib to load, with increased retries and logging for diagnostics.
+                function waitForCryptoLib(maxRetries = 60, interval = 500) {
+                    return new Promise((resolve, reject) => {
+                        let retries = 0;
+                        if (!window.wwebjs_client_id && clientId)
+                            window.wwebjs_client_id = clientId;
+                        console.log(
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] waitForCryptoLib: Starting check.`
+                        );
+                        const check = () => {
+                            if (window.Store) {
+                                if (window.Store.CryptoLib) {
+                                    console.log(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] waitForCryptoLib: Found window.Store.CryptoLib after ${retries} retries.`
+                                    );
+                                    return resolve();
+                                } else {
+                                    console.log(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] waitForCryptoLib: window.Store found, but window.Store.CryptoLib is missing. Retry ${
+                                            retries + 1
+                                        }/${maxRetries}.`
+                                    );
+                                }
+                            } else {
+                                console.log(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] waitForCryptoLib: window.Store not found. Retry ${
+                                        retries + 1
+                                    }/${maxRetries}.`
+                                );
+                            }
 
-            try {
-                await waitForCryptoLib();
+                            if (retries++ >= maxRetries) {
+                                console.error(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] waitForCryptoLib: Max retries reached. CryptoLib not found.`
+                                );
+                                return reject(
+                                    "CryptoLib not found after extended wait and detailed checks"
+                                );
+                            }
+                            setTimeout(check, interval);
+                        };
+                        check();
+                    });
+                }
 
-                // Reinitialize the crypto state
-                window.Store.CryptoLib.initializeWebCrypto();
+                try {
+                    await waitForCryptoLib();
+                    console.log(
+                        `[${
+                            window.wwebjs_client_id || "default"
+                        }] CryptoLib found, proceeding to reinitialize and patch Msg store in reinitializeCryptoStore.`
+                    );
 
-                // Patch message handler to decrypt immediately
-                const originalAddHandler = window.Store.Msg.on;
-                window.Store.Msg.on = function (event, handler) {
-                    if (event === "add") {
-                        return originalAddHandler.call(
-                            this,
-                            event,
-                            async (msg) => {
-                                if (msg.isNewMsg) {
-                                    if (msg.type === MessageTypes.CIPHERTEXT) {
-                                        try {
-                                            await window.Store.CryptoLib.decryptE2EMessage(
-                                                msg
-                                            );
-                                            msg.once("change:type", (_msg) =>
-                                                window.onAddMessageEvent(
-                                                    window.WWebJS.getMessageModel(
-                                                        _msg
-                                                    )
-                                                )
-                                            );
-                                            window.onAddMessageCiphertextEvent(
-                                                window.WWebJS.getMessageModel(
+                    // Reinitialize the crypto state
+                    window.Store.CryptoLib.initializeWebCrypto();
+
+                    // Patch message handler to decrypt immediately
+                    const originalAddHandler = window.Store.Msg.on;
+                    window.Store.Msg.on = function (event, handler) {
+                        if (event === "add") {
+                            return originalAddHandler.call(
+                                this,
+                                event,
+                                async (msg) => {
+                                    if (msg.isNewMsg) {
+                                        if (
+                                            msg.type === CIPHERTEXT_TYPE_VALUE
+                                        ) {
+                                            try {
+                                                await window.Store.CryptoLib.decryptE2EMessage(
                                                     msg
-                                                )
-                                            );
-                                        } catch (err) {
-                                            console.error(
-                                                "Failed to decrypt message:",
-                                                err
-                                            );
+                                                );
+                                                msg.once(
+                                                    "change:type",
+                                                    (_msg) =>
+                                                        window.onAddMessageEvent(
+                                                            window.WWebJS.getMessageModel(
+                                                                _msg
+                                                            )
+                                                        )
+                                                );
+                                                window.onAddMessageCiphertextEvent(
+                                                    window.WWebJS.getMessageModel(
+                                                        msg
+                                                    )
+                                                );
+                                            } catch (err) {
+                                                console.error(
+                                                    `[${
+                                                        window.wwebjs_client_id ||
+                                                        "default"
+                                                    }] Failed to decrypt message during reinitializeCryptoStore:`,
+                                                    err.message,
+                                                    err.stack
+                                                );
+                                            }
+                                        } else {
+                                            handler(msg);
                                         }
-                                    } else {
-                                        handler(msg);
                                     }
                                 }
-                            }
+                            );
+                        }
+                        return originalAddHandler.call(this, event, handler);
+                    };
+                    console.log(
+                        `[${
+                            window.wwebjs_client_id || "default"
+                        }] Msg store patched successfully in reinitializeCryptoStore.`
+                    );
+                } catch (err) {
+                    console.error(
+                        `[${
+                            window.wwebjs_client_id || "default"
+                        }] Error during reinitializeCryptoStore: ${
+                            err.message
+                        }`,
+                        err.stack
+                    );
+                    // Propagate a more specific error if waitForCryptoLib failed.
+                    if (
+                        err.message &&
+                        err.message.includes("CryptoLib not found")
+                    ) {
+                        throw new Error(
+                            "Failed to initialize CryptoLib: " + err.message
                         );
                     }
-                    return originalAddHandler.call(this, event, handler);
-                };
-            } catch (err) {
-                throw new Error("Failed to initialize CryptoLib");
-            }
-        });
+                    throw new Error(
+                        "Failed to reinitialize crypto store: " +
+                            (err.message || "Unknown error")
+                    );
+                }
+            },
+            this.clientId,
+            MessageTypes.CIPHERTEXT
+        );
     }
 }
 
