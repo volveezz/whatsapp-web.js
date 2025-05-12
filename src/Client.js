@@ -966,11 +966,6 @@ class Client extends EventEmitter {
                 .filter((k) => k.startsWith("on") && k.endsWith("Event"))
                 .forEach((k) => {
                     if (window.hasOwnProperty(k)) {
-                        console.log(
-                            `[${
-                                window.wwebjs_client_id || "default"
-                            }] WWebJS Cleanup: Attempting to clear old binding: ${k}`
-                        );
                         try {
                             window[k] = null;
                             delete window[k];
@@ -979,12 +974,6 @@ class Client extends EventEmitter {
                                     `[${
                                         window.wwebjs_client_id || "default"
                                     }] WWebJS Cleanup: ${k} STILL EXISTS after delete attempt`
-                                );
-                            } else {
-                                console.log(
-                                    `[${
-                                        window.wwebjs_client_id || "default"
-                                    }] WWebJS Cleanup: Cleared ${k} successfully.`
                                 );
                             }
                         } catch (e) {

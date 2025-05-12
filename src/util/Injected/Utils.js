@@ -479,22 +479,43 @@ exports.LoadUtils = () => {
                 ? mediaInfo
                 : window.WWebJS.mediaInfoToFile(mediaInfo);
 
-        console.log("Creating OpaqueData");
+        const fileIdentifier =
+            file.name ||
+            file.hash ||
+            file.filehash ||
+            file.mediaKey ||
+            file.size ||
+            "[unknown-file]";
+
+        const clientId = window.wwebjs_client_id || "default";
+        const logPrefix = `[${clientId}][${fileIdentifier}]`;
+
+        console.log(
+            `${logPrefix} [WWebJS:processMediaData] Creating OpaqueData`
+        );
         const mData = await window.Store.OpaqueData.createFromData(
             file,
             file.type
         );
-        console.log("Creating MediaPrep");
+        console.log(
+            `${logPrefix} [WWebJS:processMediaData] Creating MediaPrep`
+        );
         const mediaPrep = window.Store.MediaPrep.prepRawMedia(mData, {
             asDocument: forceDocument,
         });
-        console.log("Waiting for MediaPrep");
+        console.log(
+            `${logPrefix} [WWebJS:processMediaData] Waiting for MediaPrep`
+        );
         const mediaData = await mediaPrep.waitForPrep();
-        console.log("Creating MediaObject");
+        console.log(
+            `${logPrefix} [WWebJS:processMediaData] Creating MediaObject`
+        );
         const mediaObject = window.Store.MediaObject.getOrCreateMediaObject(
             mediaData.filehash
         );
-        console.log("Creating MediaType");
+        console.log(
+            `${logPrefix} [WWebJS:processMediaData] Creating MediaType`
+        );
         const mediaType = window.Store.MediaTypes.msgToMediaType({
             type: mediaData.type,
             isGif: mediaData.isGif,
@@ -522,12 +543,14 @@ exports.LoadUtils = () => {
             );
         }
 
-        console.log("Creating RenderableUrl");
+        console.log(
+            `${logPrefix} [WWebJS:processMediaData] Creating RenderableUrl`
+        );
         mediaData.renderableUrl = mediaData.mediaBlob.url();
         mediaObject.consolidate(mediaData.toJSON());
         mediaData.mediaBlob.autorelease();
 
-        console.log("Uploading Media");
+        console.log(`${logPrefix} [WWebJS:processMediaData] Uploading Media`);
 
         // Function to create a single upload attempt
         const createUploadAttempt = () => {
@@ -565,7 +588,7 @@ exports.LoadUtils = () => {
 
                 const handleSuccessfulUpload = (result) => {
                     console.log(
-                        `WWebJS: Media upload successful. Elapsed: ${
+                        `${logPrefix} [WWebJS:processMediaData] Media upload successful. Elapsed: ${
                             (Date.now() - startTime) / 1000
                         }s`
                     );
@@ -574,7 +597,7 @@ exports.LoadUtils = () => {
 
                 const handleFailedAttempt = (error) => {
                     console.warn(
-                        `WWebJS: A media upload attempt failed: ${
+                        `${logPrefix} [WWebJS:processMediaData] A media upload attempt failed: ${
                             error?.message || String(error)
                         }. Retrying if time permits.`
                     );
@@ -597,7 +620,7 @@ exports.LoadUtils = () => {
                     }
 
                     console.log(
-                        `WWebJS: Launching new media upload attempt. Total elapsed: ${
+                        `${logPrefix} [WWebJS:processMediaData] Launching new media upload attempt. Total elapsed: ${
                             (Date.now() - startTime) / 1000
                         }s`
                     );
@@ -610,7 +633,7 @@ exports.LoadUtils = () => {
                     } catch (error) {
                         // This catch is for synchronous errors in calling createUploadAttempt itself.
                         console.error(
-                            `WWebJS: Critical error during launch of upload attempt: ${
+                            `${logPrefix} [WWebJS:processMediaData] Critical error during launch of upload attempt: ${
                                 error?.message || String(error)
                             }`
                         );
@@ -646,14 +669,14 @@ exports.LoadUtils = () => {
                         // Check hasSettled again, as an attempt might resolve just before this timeout.
                         const elapsedTimeS = (Date.now() - startTime) / 1000;
                         console.error(
-                            `WWebJS: Media upload failed after all retries. Total time: ${elapsedTimeS}s.`
+                            `${logPrefix} [WWebJS:processMediaData] Media upload failed after all retries. Total time: ${elapsedTimeS}s.`
                         );
                         settlePromise(
                             reject,
                             new Error(
                                 `Media upload timed out after ${
                                     totalTimeoutMs / 1000
-                                } seconds. All attempts failed.`
+                                } seconds. All attempts failed. File: ${fileIdentifier}`
                             )
                         );
                     }
@@ -664,10 +687,12 @@ exports.LoadUtils = () => {
         // Attempt uploads with retry strategy
         const uploadedMedia = await handleUploadWithRetries();
 
-        console.log("Uploaded Media");
+        console.log(`${logPrefix} [WWebJS:processMediaData] Uploaded Media`);
         const mediaEntry = uploadedMedia.mediaEntry;
         if (!mediaEntry) {
-            throw new Error("upload failed: media entry was not created");
+            throw new Error(
+                `${logPrefix} upload failed: media entry was not created`
+            );
         }
 
         mediaData.set({
@@ -684,7 +709,9 @@ exports.LoadUtils = () => {
             firstFrameSidecar: mediaEntry.firstFrameSidecar,
         });
 
-        console.log("Returning MediaData");
+        console.log(
+            `${logPrefix} [WWebJS:processMediaData] Returning MediaData`
+        );
         return mediaData;
     };
 
