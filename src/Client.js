@@ -3126,9 +3126,13 @@ class Client extends EventEmitter {
     async reinitializeCryptoStore() {
         if (!this.pupPage || this.pupPage.isClosed()) return;
 
+        await this.pupPage.waitForFunction("!!window.Store", {
+            timeout: 180_000,
+        });
+
         await this.pupPage?.evaluate(async (CIPHERTEXT_TYPE_VALUE) => {
             try {
-                if (window.Store.CryptoLib) {
+                if (window.Store?.CryptoLib) {
                     // Reinitialize the crypto state
                     window.Store.CryptoLib.initializeWebCrypto();
                 }
