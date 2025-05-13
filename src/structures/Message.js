@@ -720,7 +720,8 @@ class Message extends Base {
                     const filename =
                         msg.filename ||
                         `ls_media-${(msg.id && msg.id.id) || Date.now()}`;
-                    const mimetype = msg.mimetype || "application/octet-stream";
+                    const mimetype =
+                        msg?.mimetype || "application/octet-stream";
                     const filesize = msg.size;
 
                     console.log(
@@ -792,9 +793,10 @@ class Message extends Base {
         }
 
         let extension =
-            (result.mimetype.match(/^[^/]+\/([^;]+)/) || [])[1] || "";
+            (result.mimetype?.match(/^[^/]+\/([^;]+)/) || [])[1] || "";
 
-        if (extension.length > 4) extension = mime.extension(mimetype) ?? "";
+        if (extension.length > 4)
+            extension = mime.extension(result.mimetype) ?? "";
 
         if (!extension) extension = "bin";
 
