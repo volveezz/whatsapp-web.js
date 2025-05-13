@@ -2856,7 +2856,7 @@ class Client extends EventEmitter {
         await this.pupPage?.evaluate(
             async (clientId, CIPHERTEXT_TYPE_VALUE) => {
                 // Wait for CryptoLib to load, with increased retries and logging for diagnostics.
-                function waitForCryptoLib(maxRetries = 60, interval = 500) {
+                function waitForCryptoLib(maxRetries = 60, interval = 1500) {
                     return new Promise((resolve, reject) => {
                         let retries = 0;
                         if (!window.wwebjs_client_id && clientId)
@@ -2875,14 +2875,6 @@ class Client extends EventEmitter {
                                         }] waitForCryptoLib: Found window.Store.CryptoLib after ${retries} retries.`
                                     );
                                     return resolve();
-                                } else {
-                                    console.log(
-                                        `[${
-                                            window.wwebjs_client_id || "default"
-                                        }] waitForCryptoLib: window.Store found, but window.Store.CryptoLib is missing. Retry ${
-                                            retries + 1
-                                        }/${maxRetries}.`
-                                    );
                                 }
                             } else {
                                 console.log(
