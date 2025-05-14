@@ -213,9 +213,6 @@ class Client extends EventEmitter {
                     }
                 }
 
-                // Force reinstallation of hooks on reconnect
-                window.__wwebjs_authHooksInstalled = false;
-
                 // Keep existing queue or initialize new one
                 window.__wwebjs_q = window.__wwebjs_q || [];
 
@@ -776,9 +773,6 @@ class Client extends EventEmitter {
 
             /*───────────────── Wire WA-side emitters ─────────────────*/
             await this.pupPage.evaluate(() => {
-                // Reconnection tracking - remove existing hooks first
-                window.__wwebjs_authHooksInstalled = false;
-
                 // Move the hook setup into a named function so we can call it later if needed
                 function setupAuthHooks() {
                     try {
@@ -1049,12 +1043,9 @@ class Client extends EventEmitter {
                     }
                 }
 
-                // Expose setupAuthHooks globally for potential recovery
                 window.setupAuthHooks = setupAuthHooks;
 
-                // Call the setup function immediately and check result
-                const setupSuccess = setupAuthHooks();
-                window.__wwebjs_authHooksInstalled = setupSuccess;
+                setupAuthHooks();
 
                 // Set up a periodic check to ensure hooks are still working
                 if (window.__wwebjs_hook_check) {
@@ -1068,12 +1059,9 @@ class Client extends EventEmitter {
                                 window.wwebjs_client_id || "default"
                             }] AuthStore or Cmd is missing, trying to re-setup hooks`
                         );
-                        const success = setupAuthHooks();
-                        window.__wwebjs_authHooksInstalled = success;
+                        setupAuthHooks();
                     }
                 }, 300000); // Check every 5 minutes
-
-                return setupSuccess;
             });
 
             // Clean up existing interval if it's running
@@ -1102,10 +1090,8 @@ class Client extends EventEmitter {
                         // Try to reinstall hooks
                         await this.pupPage.evaluate((id) => {
                             window.wwebjs_client_id = id; // Ensure client_id is available for subsequent browser-side logs
-                            window.__wwebjs_authHooksInstalled = false;
                             if (typeof window.setupAuthHooks === "function") {
-                                const success = window.setupAuthHooks();
-                                window.__wwebjs_authHooksInstalled = success;
+                                window.setupAuthHooks();
                             }
                         }, this.clientId);
                     }

@@ -6,29 +6,14 @@
  * @param {string} name - The name of the function to expose on the window object.
  * @param {Function} fn - The function to expose.
  */
-+async function exposeFunctionIfAbsent(page, name, fn) {
-    // Puppeteer bindings survive every navigation, so cache what we already exposed
+async function exposeFunctionIfAbsent(page, name, fn) {
     page._exposedBindings = page._exposedBindings || new Set();
-    if (page._exposedBindings.has(name)) return; // already done for this Page
+    if (page._exposedBindings.has(name)) return;
 
-    // Also check the browser context in case the binding was created elsewhere
-    const exists = await page
-        .evaluate((n) => typeof window[n] === "function", name)
-        .catch(() => false); // page still loading: assume “not”
-    if (exists) {
-        // nothing to do – let it live
-        page._exposedBindings.add(name);
-        return;
-    }
+    await page.removeExposedFunction(name).catch(() => {});
 
-    try {
-        await page.exposeFunction(name, fn); // first time → success
-        page._exposedBindings.add(name);
-    } catch (err) {
-        // race: somebody else exposed it
-        if (!/already exists/i.test(err.message)) throw err;
-        page._exposedBindings.add(name);
-    }
-};
+    await page.exposeFunction(name, fn);
+    page._exposedBindings.add(name);
+}
 
 module.exports = { exposeFunctionIfAbsent };
