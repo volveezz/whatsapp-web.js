@@ -784,106 +784,106 @@ class Client extends EventEmitter {
                         }
 
                         // Improved safeEmit with fallback mechanism and duplicate prevention
-                        const safeEmit = (fnName, ...args) => {
-                            // First try the exposed function
-                            if (typeof window[fnName] === "function") {
-                                try {
-                                    window[fnName](...args);
-                                } catch (err) {
-                                    console.error(
-                                        `[${
-                                            window.wwebjs_client_id || "default"
-                                        }] Error calling ${fnName}:`,
-                                        err
-                                    );
+                        // const safeEmit = (fnName, ...args) => {
+                        //     // First try the exposed function
+                        //     if (typeof window[fnName] === "function") {
+                        //         try {
+                        //             window[fnName](...args);
+                        //         } catch (err) {
+                        //             console.error(
+                        //                 `[${
+                        //                     window.wwebjs_client_id || "default"
+                        //                 }] Error calling ${fnName}:`,
+                        //                 err
+                        //             );
 
-                                    // Fall back to bridge if function call fails
-                                    if (
-                                        typeof window.__wwebjs_bridge ===
-                                        "function"
-                                    ) {
-                                        try {
-                                            window.__wwebjs_bridge(
-                                                `recovery_${fnName}`,
-                                                ...args
-                                            );
-                                        } catch (bridgeErr) {
-                                            console.error(
-                                                `[${
-                                                    window.wwebjs_client_id ||
-                                                    "default"
-                                                }] Bridge fallback also failed:`,
-                                                bridgeErr
-                                            );
-                                        }
-                                    }
+                        //             // Fall back to bridge if function call fails
+                        //             if (
+                        //                 typeof window.__wwebjs_bridge ===
+                        //                 "function"
+                        //             ) {
+                        //                 try {
+                        //                     window.__wwebjs_bridge(
+                        //                         `recovery_${fnName}`,
+                        //                         ...args
+                        //                     );
+                        //                 } catch (bridgeErr) {
+                        //                     console.error(
+                        //                         `[${
+                        //                             window.wwebjs_client_id ||
+                        //                             "default"
+                        //                         }] Bridge fallback also failed:`,
+                        //                         bridgeErr
+                        //                     );
+                        //                 }
+                        //             }
 
-                                    // Restore function for future calls
-                                    window[fnName] = function (...restoreArgs) {
-                                        console.log(
-                                            `[${
-                                                window.wwebjs_client_id ||
-                                                "default"
-                                            }] Restored ${fnName} called with:`,
-                                            restoreArgs
-                                        );
-                                        if (
-                                            typeof window.__wwebjs_bridge ===
-                                            "function"
-                                        ) {
-                                            window.__wwebjs_bridge(
-                                                `recovery_${fnName}`,
-                                                ...restoreArgs
-                                            );
-                                        }
-                                    };
-                                }
-                            } else {
-                                console.warn(
-                                    `[${
-                                        window.wwebjs_client_id || "default"
-                                    }] ${fnName} is not available, using bridge`
-                                );
-                                // Use bridge directly if function is missing
-                                if (
-                                    typeof window.__wwebjs_bridge === "function"
-                                ) {
-                                    try {
-                                        window.__wwebjs_bridge(
-                                            `recovery_${fnName}`,
-                                            ...args
-                                        );
-                                    } catch (bridgeErr) {
-                                        console.error(
-                                            `[${
-                                                window.wwebjs_client_id ||
-                                                "default"
-                                            }] Bridge call failed:`,
-                                            bridgeErr
-                                        );
-                                    }
-                                }
+                        //             // Restore function for future calls
+                        //             window[fnName] = function (...restoreArgs) {
+                        //                 console.log(
+                        //                     `[${
+                        //                         window.wwebjs_client_id ||
+                        //                         "default"
+                        //                     }] Restored ${fnName} called with:`,
+                        //                     restoreArgs
+                        //                 );
+                        //                 if (
+                        //                     typeof window.__wwebjs_bridge ===
+                        //                     "function"
+                        //                 ) {
+                        //                     window.__wwebjs_bridge(
+                        //                         `recovery_${fnName}`,
+                        //                         ...restoreArgs
+                        //                     );
+                        //                 }
+                        //             };
+                        //         }
+                        //     } else {
+                        //         console.warn(
+                        //             `[${
+                        //                 window.wwebjs_client_id || "default"
+                        //             }] ${fnName} is not available, using bridge`
+                        //         );
+                        //         // Use bridge directly if function is missing
+                        //         if (
+                        //             typeof window.__wwebjs_bridge === "function"
+                        //         ) {
+                        //             try {
+                        //                 window.__wwebjs_bridge(
+                        //                     `recovery_${fnName}`,
+                        //                     ...args
+                        //                 );
+                        //             } catch (bridgeErr) {
+                        //                 console.error(
+                        //                     `[${
+                        //                         window.wwebjs_client_id ||
+                        //                         "default"
+                        //                     }] Bridge call failed:`,
+                        //                     bridgeErr
+                        //                 );
+                        //             }
+                        //         }
 
-                                // Create a placeholder for future calls
-                                window[fnName] = function (...restoreArgs) {
-                                    console.log(
-                                        `[${
-                                            window.wwebjs_client_id || "default"
-                                        }] New placeholder for ${fnName} called with:`,
-                                        restoreArgs
-                                    );
-                                    if (
-                                        typeof window.__wwebjs_bridge ===
-                                        "function"
-                                    ) {
-                                        window.__wwebjs_bridge(
-                                            `recovery_${fnName}`,
-                                            ...restoreArgs
-                                        );
-                                    }
-                                };
-                            }
-                        };
+                        //         // Create a placeholder for future calls
+                        //         window[fnName] = function (...restoreArgs) {
+                        //             console.log(
+                        //                 `[${
+                        //                     window.wwebjs_client_id || "default"
+                        //                 }] New placeholder for ${fnName} called with:`,
+                        //                 restoreArgs
+                        //             );
+                        //             if (
+                        //                 typeof window.__wwebjs_bridge ===
+                        //                 "function"
+                        //             ) {
+                        //                 window.__wwebjs_bridge(
+                        //                     `recovery_${fnName}`,
+                        //                     ...restoreArgs
+                        //                 );
+                        //             }
+                        //         };
+                        //     }
+                        // };
 
                         // Clean up existing listeners first to prevent duplicates
                         try {
@@ -918,7 +918,7 @@ class Client extends EventEmitter {
                                         );
                                     }
 
-                                    safeEmit("onAuthAppStateChangedEvent", st);
+                                    // safeEmit("onAuthAppStateChangedEvent", st);
                                 } catch (e) {
                                     console.error(
                                         `[${
@@ -941,7 +941,7 @@ class Client extends EventEmitter {
                                                 "auth_synced"
                                             );
                                         }
-                                        safeEmit("onAppStateHasSyncedEvent");
+                                        // safeEmit("onAppStateHasSyncedEvent");
                                     }
                                 } catch (e) {
                                     console.error(
@@ -987,10 +987,10 @@ class Client extends EventEmitter {
                                             );
                                         }
 
-                                        safeEmit(
-                                            "onOfflineProgressUpdateEvent",
-                                            progress
-                                        );
+                                        // safeEmit(
+                                        //     "onOfflineProgressUpdateEvent",
+                                        //     progress
+                                        // );
                                     }
                                 } catch (e) {
                                     console.error(
@@ -1013,7 +1013,7 @@ class Client extends EventEmitter {
                                     ) {
                                         window.__wwebjs_bridge("logout");
                                     }
-                                    safeEmit("onLogoutEvent");
+                                    // safeEmit("onLogoutEvent");
                                 } catch (e) {
                                     console.error(
                                         `[${
