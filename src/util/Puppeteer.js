@@ -7,13 +7,8 @@
  * @param {Function} fn - The function to expose.
  */
 async function exposeFunctionIfAbsent(page, name, fn) {
-    page._exposedBindings = page._exposedBindings || new Set();
-    if (page._exposedBindings.has(name)) return;
-
     await page.removeExposedFunction(name).catch(() => {});
-
     await page.exposeFunction(name, fn);
-    page._exposedBindings.add(name);
 }
 
 module.exports = { exposeFunctionIfAbsent };

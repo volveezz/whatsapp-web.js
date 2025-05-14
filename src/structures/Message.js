@@ -8,7 +8,7 @@ const Payment = require("./Payment");
 const Reaction = require("./Reaction");
 const Contact = require("./Contact");
 const { MessageTypes } = require("../util/Constants");
-const mime = require("mime-types");
+const { extname } = require("path");
 
 /**
  * Represents a Message on WhatsApp
@@ -630,8 +630,8 @@ class Message extends Base {
         }
 
         const result = await this.client.pupPage.evaluate(
-            async (msgId, downloadPath, clientId) => {
-                const _clientId = clientId || "default";
+            async (msgId, downloadPath) => {
+                const _clientId = window.wwebjs_client_id || "default";
                 const logPrefix = `[${_clientId}] [WAWEBJS] [DownloadAndSaveMedia]:`;
                 console.log(`${logPrefix} Starting for msgId: ${msgId}`);
 
@@ -779,8 +779,7 @@ class Message extends Base {
                 }
             },
             this.id._serialized,
-            this.client.options.downloadPath,
-            this.client.clientId
+            this.client.options.downloadPath
         );
 
         if (!result?.status?.ok) {
@@ -792,25 +791,11 @@ class Message extends Base {
             return;
         }
 
-        let extension =
-            (result.mimetype?.match(/^[^/]+\/([^;]+)/) || [])[1] || "";
+        if (!extname(result.path)) {
+            result.path = `${result.path}.${result.mimetype.split("/")[1]}`;
+        }
 
-        if (extension.length > 4)
-            extension = mime.extension(result.mimetype) ?? "";
-
-        if (!extension) extension = "bin";
-
-        const path = result.path.toLowerCase().endsWith(extension)
-            ? result.path
-            : `${result.path}.${extension}`;
-
-        return {
-            status: result.status,
-            filename: result.filename,
-            mimetype: result.mimetype,
-            filesize: result.filesize,
-            path,
-        };
+        return result;
     }
 
     /**
