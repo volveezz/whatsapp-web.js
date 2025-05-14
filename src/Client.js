@@ -130,278 +130,1205 @@ class Client extends EventEmitter {
     }
 
     async inject() {
-        let hasReloaded = false;
-        const reloadHandler = async () => {
-            hasReloaded = true;
-        };
+        if (this.isInjecting) return;
+        if (!this.pupPage || this.pupPage.isClosed()) return;
+        this.isInjecting = true;
+
         try {
+            let hasReloaded = false;
+            const reloadHandler = async () => {
+                hasReloaded = true;
+            };
+
             this.pupPage.on("framenavigated", reloadHandler);
 
-            await this.pupPage.waitForFunction(
-                "window.Debug?.VERSION != undefined",
-                { timeout: this.options.authTimeoutMs }
-            );
-
-            const version = await this.getWWebVersion();
-            const isCometOrAbove = parseInt(version.split(".")?.[1]) >= 3000;
-
-            if (isCometOrAbove) {
-                await this.pupPage.evaluate(ExposeAuthStore);
-            } else {
-                await this.pupPage.evaluate(
-                    ExposeLegacyAuthStore,
-                    moduleRaid.toString()
+            // First, let's clean up any existing hooks to prevent duplication
+            await this.pupPage.evaluate(() => {
+                // Record reconnection for logging
+                window.__wwebjs_reconnect_count =
+                    (window.__wwebjs_reconnect_count || 0) + 1;
+                console.log(
+                    `[${window.wwebjs_client_id || "default"}] Reconnection #${
+                        window.__wwebjs_reconnect_count
+                    }`
                 );
-            }
 
-            const needAuthentication = await this.pupPage.evaluate(async () => {
-                let state = window.AuthStore.AppState.state;
-
-                if (
-                    state === "OPENING" ||
-                    state === "UNLAUNCHED" ||
-                    state === "PAIRING"
-                ) {
-                    // wait till state changes
-                    await new Promise((r) => {
-                        window.AuthStore.AppState.on(
-                            "change:state",
-                            function waitTillInit(_AppState, state) {
-                                if (
-                                    state !== "OPENING" &&
-                                    state !== "UNLAUNCHED" &&
-                                    state !== "PAIRING"
-                                ) {
-                                    window.AuthStore.AppState.off(
-                                        "change:state",
-                                        waitTillInit
-                                    );
-                                    r();
-                                }
-                            }
-                        );
-                    });
+                // Clear any existing intervals to prevent memory leaks
+                if (window.__wwebjs_check_functions) {
+                    clearInterval(window.__wwebjs_check_functions);
+                    window.__wwebjs_check_functions = null;
                 }
-                state = window.AuthStore.AppState.state;
-                return state == "UNPAIRED" || state == "UNPAIRED_IDLE";
+
+                if (window.__wwebjs_hook_check) {
+                    clearInterval(window.__wwebjs_hook_check);
+                    window.__wwebjs_hook_check = null;
+                }
+
+                if (window.__wwebjs_authstore_check) {
+                    clearInterval(window.__wwebjs_authstore_check);
+                    window.__wwebjs_authstore_check = null;
+                }
+
+                // Clean up existing event listeners if possible - these are the key hooks we'll reattach
+                if (window.AuthStore) {
+                    try {
+                        // Clean up AppState listeners
+                        if (
+                            window.AuthStore.AppState &&
+                            typeof window.AuthStore.AppState.off === "function"
+                        ) {
+                            window.AuthStore.AppState.off("change:state");
+                            window.AuthStore.AppState.off("change:hasSynced");
+                        }
+
+                        // Clean up Cmd listeners
+                        if (
+                            window.AuthStore.Cmd &&
+                            typeof window.AuthStore.Cmd.off === "function"
+                        ) {
+                            window.AuthStore.Cmd.off("offline_progress_update");
+                            window.AuthStore.Cmd.off("logout");
+                        }
+
+                        // Clean up Conn listeners for QR changes
+                        if (
+                            window.AuthStore.Conn &&
+                            typeof window.AuthStore.Conn.off === "function"
+                        ) {
+                            window.AuthStore.Conn.off("change:ref");
+                        }
+
+                        console.log(
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] Successfully cleaned up existing event listeners`
+                        );
+                    } catch (err) {
+                        console.warn(
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] Error cleaning up listeners:`,
+                            err
+                        );
+                    }
+                }
+
+                // Force reinstallation of hooks on reconnect
+                window.__wwebjs_authHooksInstalled = false;
+
+                // Keep existing queue or initialize new one
+                window.__wwebjs_q = window.__wwebjs_q || [];
+
+                return true;
             });
 
-            if (needAuthentication) {
+            /*───────────────── preload stub ─────────────────*/
+            if (!this._bridgePreloaded) {
+                await this.pupPage.evaluateOnNewDocument(() => {
+                    if (window.__wwebjs_preload_done) return;
+                    window.__wwebjs_preload_done = true;
+
+                    // Track last loading progress to prevent duplicate events
+                    window.__wwebjs_last_progress = -1;
+
+                    // Create persistent placeholder functions that will survive page changes
+                    const persistentFunctions = [
+                        "onOfflineProgressUpdateEvent",
+                        "onAuthAppStateChangedEvent",
+                        "onAppStateHasSyncedEvent",
+                        "onLogoutEvent",
+                        "onQRChangedEvent",
+                    ];
+
+                    persistentFunctions.forEach((fn) => {
+                        // Only define if it doesn't exist
+                        if (!window[fn]) {
+                            Object.defineProperty(window, fn, {
+                                value: function (...args) {
+                                    console.log(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Placeholder for ${fn} called with:`,
+                                        args
+                                    );
+                                },
+                                writable: true,
+                                configurable: false,
+                            });
+                        }
+                    });
+
+                    // Add a recovery mechanism that periodically checks and restores these functions
+                    window.__wwebjs_check_functions = setInterval(() => {
+                        persistentFunctions.forEach((fn) => {
+                            if (typeof window[fn] !== "function") {
+                                console.warn(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] Function ${fn} was lost, restoring placeholder`
+                                );
+                                window[fn] = function (...args) {
+                                    console.log(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Restored placeholder for ${fn} called with:`,
+                                        args
+                                    );
+                                };
+                            }
+                        });
+                    }, 300000);
+
+                    // Setup bridge for events
+                    window.__wwebjs_ready = false;
+                    window.__wwebjs_q = [];
+                    window.__wwebjs_bridge = (...args) => {
+                        if (!window.__wwebjs_ready)
+                            return window.__wwebjs_q.push(args);
+                        if (typeof window.__wwebjs_emit === "function")
+                            window.__wwebjs_emit(...args);
+                    };
+                    window.__wwebjs_emit = (...args) =>
+                        window.__wwebjs_bridge(...args);
+                });
+                this._bridgePreloaded = true;
+            }
+
+            /*───────────────── wait for core WA objects ─────────────────*/
+            await this.pupPage.waitForFunction(
+                "window.Debug?.VERSION != undefined",
+                { timeout: 180_000 }
+            );
+
+            // Expose clientId to the browser context for in-page script logging
+            await this.pupPage.evaluate((id) => {
+                window.wwebjs_client_id = id;
+            }, this.clientId);
+
+            // Initialize tracking for last progress percentage - this handles reconnection better
+            this._lastLoadingPercent = await this.pupPage.evaluate(() => {
+                // Return existing progress if available, otherwise -1
+                return window.__wwebjs_last_progress || -1;
+            });
+
+            // Setup event handlers - using a version that's safer for reconnection
+            await this.pupPage.exposeFunction(
+                "onOfflineProgressUpdateEvent",
+                (pct) => {
+                    // Only emit if percentage has changed
+                    if (pct !== this._lastLoadingPercent) {
+                        this._lastLoadingPercent = pct;
+                        this.emit(Events.LOADING_SCREEN, pct, "WhatsApp");
+                    }
+                }
+            );
+
+            await this.pupPage.exposeFunction(
+                "onAuthAppStateChangedEvent",
+                (state) => {
+                    this.emit(Events.STATE_CHANGED, state);
+                    if (state === "UNPAIRED_IDLE") {
+                        // refresh QR if phone unpaired itself
+                        this.pupPage
+                            .evaluate(() => {
+                                if (
+                                    window.Store &&
+                                    window.Store.Cmd &&
+                                    typeof window.Store.Cmd.refreshQR ===
+                                        "function"
+                                ) {
+                                    window.Store.Cmd.refreshQR();
+                                } else {
+                                    console.warn(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Cannot refresh QR: Store.Cmd is not available`
+                                    );
+                                }
+                            })
+                            .catch((err) => {
+                                console.error(
+                                    `[${this.clientId}] Error refreshing QR:`,
+                                    err
+                                );
+                            });
+                    }
+                }
+            );
+
+            await this.pupPage.exposeFunction(
+                "onAppStateHasSyncedEvent",
+                async () => {
+                    try {
+                        const authEventPayload =
+                            await this.authStrategy.getAuthEventPayload();
+
+                        this.emit(Events.AUTHENTICATED, authEventPayload);
+
+                        const injected = await this.pupPage.evaluate(
+                            async () => {
+                                return (
+                                    typeof window.Store !== "undefined" &&
+                                    typeof window.WWebJS !== "undefined"
+                                );
+                            }
+                        );
+
+                        if (!injected) {
+                            // Store version info for caching if applicable
+                            if (
+                                this.options.webVersionCache &&
+                                this.options.webVersionCache.type === "local" &&
+                                this.currentIndexHtml
+                            ) {
+                                const {
+                                    type: webCacheType,
+                                    ...webCacheOptions
+                                } = this.options.webVersionCache;
+                                const webCache = WebCacheFactory.createWebCache(
+                                    webCacheType,
+                                    webCacheOptions
+                                );
+                                const version = await this.getWWebVersion();
+                                await webCache.persist(
+                                    this.currentIndexHtml,
+                                    version
+                                );
+                            }
+
+                            // Determine which store exposure method to use based on version
+                            const version = await this.getWWebVersion();
+                            const isCometOrAbove =
+                                parseInt(version.split(".")?.[1]) >= 3000;
+
+                            if (isCometOrAbove) {
+                                await this.pupPage.evaluate(ExposeStore);
+                            } else {
+                                // Make sure all modules are ready before injection
+                                await new Promise((r) => setTimeout(r, 2000));
+                                await this.pupPage.evaluate(ExposeLegacyStore);
+                            }
+
+                            // Check window.Store Injection
+                            await this.pupPage.waitForFunction(
+                                "window.Store != undefined"
+                            );
+
+                            // Current connection information
+                            this.info = new ClientInfo(
+                                this,
+                                await this.pupPage.evaluate(() => {
+                                    return {
+                                        ...window.Store.Conn.serialize(),
+                                        wid: window.Store.User.getMeUser(),
+                                    };
+                                })
+                            );
+
+                            this.interface = new InterfaceController(this);
+
+                            // Load util functions (serializers, helper functions)
+                            await this.pupPage.evaluate(LoadUtils);
+
+                            await this.attachEventListeners();
+                            this._storeInjected = true;
+                        }
+
+                        this.emit(Events.READY);
+                        this.authStrategy.afterAuthReady();
+                    } catch (err) {
+                        console.error(
+                            `[${this.clientId}] Error in onAppStateHasSyncedEvent:`,
+                            err
+                        );
+                    }
+                }
+            );
+
+            await this.pupPage.exposeFunction("onLogoutEvent", async () => {
+                this.lastLoggedOut = true;
+                this.emit(Events.DISCONNECTED, "LOGOUT");
+                await this.destroy();
+            });
+
+            // Main bridge for event communication - with explicit function instead of closures for stability
+            await this.pupPage.exposeFunction(
+                "__wwebjs_bridge",
+                async (evt, ...p) => {
+                    try {
+                        switch (evt) {
+                            case "auth_state":
+                                this.emit(Events.STATE_CHANGED, p[0]);
+                                break;
+                            case "auth_synced":
+                                this.emit(
+                                    Events.AUTHENTICATED,
+                                    await this.authStrategy.getAuthEventPayload()
+                                );
+                                if (!this._storeInjected) {
+                                    await this.pupPage.evaluate(ExposeStore);
+                                    await this.pupPage.evaluate(LoadUtils);
+                                    this.info = new ClientInfo(
+                                        this,
+                                        await this.pupPage.evaluate(() => ({
+                                            ...window.Store.Conn.serialize(),
+                                            wid: window.Store.User.getMeUser(),
+                                        }))
+                                    );
+                                    this.interface = new InterfaceController(
+                                        this
+                                    );
+                                    await this.attachEventListeners();
+                                    this._storeInjected = true;
+                                }
+                                this.emit(Events.READY);
+                                this.authStrategy.afterAuthReady();
+                                break;
+                            case "offline_progress":
+                                // Also check for duplicates here for the bridge event
+                                const progressPct = p[0];
+                                if (progressPct !== this._lastLoadingPercent) {
+                                    this._lastLoadingPercent = progressPct;
+                                    this.emit(
+                                        Events.LOADING_SCREEN,
+                                        progressPct
+                                    );
+                                }
+                                break;
+                            // Handle recovery events
+                            case "recovery_onOfflineProgressUpdateEvent":
+                                this.emit(
+                                    Events.LOADING_SCREEN,
+                                    p[0],
+                                    "WhatsApp"
+                                );
+                                break;
+                            case "recovery_onQRChangedEvent":
+                                this.emit(Events.QR_RECEIVED, p[0]);
+                                break;
+                        }
+                    } catch (err) {
+                        console.error(`[${this.clientId}] bridge error:`, err);
+                    }
+                }
+            );
+
+            // Activate the bridge and ensure we're ready for events - this handles reconnection better
+            await this.pupPage.evaluate(() => {
+                // Store reference to original function if it exists
+                const originalEmit = window.__wwebjs_emit;
+
+                // Define new emit function that works with both approaches
+                window.__wwebjs_emit = (...a) => {
+                    if (typeof window.__wwebjs_bridge === "function") {
+                        try {
+                            window.__wwebjs_bridge(...a);
+                        } catch (err) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Error in bridge:`,
+                                err
+                            );
+                        }
+                    }
+                    // Also call original if it existed and was different
+                    if (
+                        originalEmit &&
+                        originalEmit !== window.__wwebjs_bridge
+                    ) {
+                        try {
+                            originalEmit(...a);
+                        } catch (err) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Error in originalEmit:`,
+                                err
+                            );
+                        }
+                    }
+                };
+
+                window.__wwebjs_ready = true;
+
+                // Process any queued events
+                const queue = window.__wwebjs_q || [];
+                window.__wwebjs_q = [];
+
+                if (queue.length > 0) {
+                    console.log(
+                        `[${window.wwebjs_client_id || "default"}] Processing ${
+                            queue.length
+                        } queued events after reconnection`
+                    );
+                    queue.forEach((args) => {
+                        try {
+                            window.__wwebjs_bridge(...args);
+                        } catch (err) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Error processing queued event:`,
+                                err
+                            );
+                        }
+                    });
+                }
+            });
+
+            /*───────────────── Expose WA AuthStore ─────────────────*/
+            await this.pupPage.evaluate(ExposeAuthStore);
+
+            /*───────────────── Check whether we need QR login ─────────────────*/
+            const needAuth = await this.pupPage.evaluate(async () => {
+                try {
+                    const { AppState } = window.AuthStore || {};
+                    if (!AppState) {
+                        console.error(
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] AppState not available to check auth status`
+                        );
+                        return true; // Assume we need auth if we can't check
+                    }
+
+                    let st = AppState.state;
+
+                    if (["OPENING", "UNLAUNCHED", "PAIRING"].includes(st)) {
+                        // Wait till state changes
+                        await new Promise((res) => {
+                            const cb = (_a, s) => {
+                                if (
+                                    ![
+                                        "OPENING",
+                                        "UNLAUNCHED",
+                                        "PAIRING",
+                                    ].includes(s)
+                                ) {
+                                    AppState.off("change:state", cb);
+                                    res();
+                                }
+                            };
+                            AppState.on("change:state", cb);
+                        });
+                        st = AppState.state;
+                    }
+
+                    return st === "UNPAIRED" || st === "UNPAIRED_IDLE";
+                } catch (err) {
+                    console.error(
+                        `[${
+                            window.wwebjs_client_id || "default"
+                        }] Error checking auth state:`,
+                        err
+                    );
+                    return true; // Assume we need auth if check fails
+                }
+            });
+
+            if (needAuth) {
                 const { failed, failureEventPayload, restart } =
                     await this.authStrategy.onAuthenticationNeeded();
 
                 if (failed) {
-                    /**
-                     * Emitted when there has been an error while trying to restore an existing session
-                     * @event Client#auth_failure
-                     * @param {string} message
-                     */
                     this.emit(
                         Events.AUTHENTICATION_FAILURE,
                         failureEventPayload
                     );
                     await this.destroy();
                     if (restart) {
-                        // session restore failed so try again but without session to force new authentication
+                        // Session restore failed so try again but without session to force new authentication
                         return this.initialize();
                     }
                     return;
                 }
 
-                // Register qr events
+                // QR code handling
                 let qrRetries = 0;
-                await exposeFunctionIfAbsent(
-                    this.pupPage,
-                    "onQRChangedEvent",
-                    async (qr) => {
-                        /**
-                         * Emitted when a QR code is received
-                         * @event Client#qr
-                         * @param {string} qr QR Code
-                         */
-                        this.emit(Events.QR_RECEIVED, qr);
-                        if (this.options.qrMaxRetries > 0) {
-                            qrRetries++;
-                            if (qrRetries > this.options.qrMaxRetries) {
-                                this.emit(
-                                    Events.DISCONNECTED,
-                                    "Max qrcode retries reached"
-                                );
-                                await this.destroy();
-                            }
+                await this.pupPage.exposeFunction("onQRChangedEvent", (qr) => {
+                    this.emit(Events.QR_RECEIVED, qr);
+                    if (this.options.qrMaxRetries > 0) {
+                        qrRetries++;
+                        if (qrRetries > this.options.qrMaxRetries) {
+                            this.emit(
+                                Events.DISCONNECTED,
+                                "Max qrcode retries reached"
+                            );
+                            this.destroy().catch((err) =>
+                                console.error(
+                                    `[${this.clientId}] Error destroying after max QR retries:`,
+                                    err
+                                )
+                            );
                         }
                     }
-                );
+                });
 
-                await this.pupPage.evaluate(async () => {
-                    const registrationInfo =
-                        await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-                    const noiseKeyPair =
-                        await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-                    const staticKeyB64 = window.AuthStore.Base64Tools.encodeB64(
-                        noiseKeyPair.staticKeyPair.pubKey
-                    );
-                    const identityKeyB64 =
-                        window.AuthStore.Base64Tools.encodeB64(
-                            registrationInfo.identityKeyPair.pubKey
+                await this.pupPage.evaluate(() => {
+                    try {
+                        const reg = window.AuthStore.RegistrationUtils;
+
+                        const buildQR = async () => {
+                            try {
+                                const info =
+                                    await reg.waSignalStore.getRegistrationInfo();
+                                const noise = await reg.waNoiseInfo.get();
+                                const sB64 =
+                                    window.AuthStore.Base64Tools.encodeB64(
+                                        noise.staticKeyPair.pubKey
+                                    );
+                                const iB64 =
+                                    window.AuthStore.Base64Tools.encodeB64(
+                                        info.identityKeyPair.pubKey
+                                    );
+                                const adv = await reg.getADVSecretKey();
+                                const plat = reg.DEVICE_PLATFORM;
+                                const ref = window.AuthStore.Conn.ref;
+                                return `${ref},${sB64},${iB64},${adv},${plat}`;
+                            } catch (err) {
+                                console.error(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] Error in buildQR:`,
+                                    err
+                                );
+                                throw err;
+                            }
+                        };
+
+                        // Remove existing QR listeners to prevent duplication
+                        if (
+                            window.AuthStore.Conn &&
+                            typeof window.AuthStore.Conn.off === "function"
+                        ) {
+                            window.AuthStore.Conn.off("change:ref");
+                        }
+
+                        // Use a try-catch block to safely call the function
+                        const safeCallQREvent = async () => {
+                            try {
+                                const qrString = await buildQR();
+                                if (
+                                    typeof window.onQRChangedEvent ===
+                                    "function"
+                                ) {
+                                    window.onQRChangedEvent(qrString);
+                                } else {
+                                    console.warn(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] onQRChangedEvent is not available yet`
+                                    );
+                                    // Try to recover by using the bridge directly
+                                    if (
+                                        typeof window.__wwebjs_bridge ===
+                                        "function"
+                                    ) {
+                                        window.__wwebjs_bridge(
+                                            "recovery_onQRChangedEvent",
+                                            qrString
+                                        );
+                                    }
+                                }
+                            } catch (err) {
+                                console.error(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] Error generating QR:`,
+                                    err
+                                );
+                            }
+                        };
+
+                        safeCallQREvent(); // Initial QR
+
+                        window.AuthStore.Conn.on("change:ref", async () => {
+                            console.log(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] QR ref changed, generating new QR`
+                            );
+                            safeCallQREvent(); // Future QR changes
+                        });
+                    } catch (err) {
+                        console.error(
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] Fatal error in QR setup:`,
+                            err
                         );
-                    const advSecretKey =
-                        await window.AuthStore.RegistrationUtils.getADVSecretKey();
-                    const platform =
-                        window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
-                    const getQR = (ref) =>
-                        ref +
-                        "," +
-                        staticKeyB64 +
-                        "," +
-                        identityKeyB64 +
-                        "," +
-                        advSecretKey +
-                        "," +
-                        platform;
-
-                    window.onQRChangedEvent(getQR(window.AuthStore.Conn.ref)); // initial qr
-                    window.AuthStore.Conn.on("change:ref", (_, ref) => {
-                        window.onQRChangedEvent(getQR(ref));
-                    }); // future QR changes
+                    }
                 });
             }
 
-            await exposeFunctionIfAbsent(
-                this.pupPage,
-                "onAuthAppStateChangedEvent",
-                async (state) => {
-                    if (state == "UNPAIRED_IDLE") {
-                        // refresh qr code
-                        window.Store.Cmd.refreshQR();
+            /*───────────────── Wire WA-side emitters ─────────────────*/
+            await this.pupPage.evaluate(() => {
+                // Reconnection tracking - remove existing hooks first
+                window.__wwebjs_authHooksInstalled = false;
+
+                // Move the hook setup into a named function so we can call it later if needed
+                function setupAuthHooks() {
+                    try {
+                        const { AppState, Cmd, OfflineMessageHandler } =
+                            window.AuthStore || {};
+
+                        // Safety check for required objects
+                        if (!AppState || !Cmd) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Required AuthStore components missing, cannot set up event hooks`
+                            );
+                            return false;
+                        }
+
+                        // Improved safeEmit with fallback mechanism and duplicate prevention
+                        const safeEmit = (fnName, ...args) => {
+                            // First try the exposed function
+                            if (typeof window[fnName] === "function") {
+                                try {
+                                    window[fnName](...args);
+                                } catch (err) {
+                                    console.error(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Error calling ${fnName}:`,
+                                        err
+                                    );
+
+                                    // Fall back to bridge if function call fails
+                                    if (
+                                        typeof window.__wwebjs_bridge ===
+                                        "function"
+                                    ) {
+                                        try {
+                                            window.__wwebjs_bridge(
+                                                `recovery_${fnName}`,
+                                                ...args
+                                            );
+                                        } catch (bridgeErr) {
+                                            console.error(
+                                                `[${
+                                                    window.wwebjs_client_id ||
+                                                    "default"
+                                                }] Bridge fallback also failed:`,
+                                                bridgeErr
+                                            );
+                                        }
+                                    }
+
+                                    // Restore function for future calls
+                                    window[fnName] = function (...restoreArgs) {
+                                        console.log(
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Restored ${fnName} called with:`,
+                                            restoreArgs
+                                        );
+                                        if (
+                                            typeof window.__wwebjs_bridge ===
+                                            "function"
+                                        ) {
+                                            window.__wwebjs_bridge(
+                                                `recovery_${fnName}`,
+                                                ...restoreArgs
+                                            );
+                                        }
+                                    };
+                                }
+                            } else {
+                                console.warn(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] ${fnName} is not available, using bridge`
+                                );
+                                // Use bridge directly if function is missing
+                                if (
+                                    typeof window.__wwebjs_bridge === "function"
+                                ) {
+                                    try {
+                                        window.__wwebjs_bridge(
+                                            `recovery_${fnName}`,
+                                            ...args
+                                        );
+                                    } catch (bridgeErr) {
+                                        console.error(
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Bridge call failed:`,
+                                            bridgeErr
+                                        );
+                                    }
+                                }
+
+                                // Create a placeholder for future calls
+                                window[fnName] = function (...restoreArgs) {
+                                    console.log(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] New placeholder for ${fnName} called with:`,
+                                        restoreArgs
+                                    );
+                                    if (
+                                        typeof window.__wwebjs_bridge ===
+                                        "function"
+                                    ) {
+                                        window.__wwebjs_bridge(
+                                            `recovery_${fnName}`,
+                                            ...restoreArgs
+                                        );
+                                    }
+                                };
+                            }
+                        };
+
+                        // Clean up existing listeners first to prevent duplicates
+                        try {
+                            AppState.off("change:state");
+                            AppState.off("change:hasSynced");
+                            Cmd.off("offline_progress_update");
+                            Cmd.off("logout");
+                        } catch (cleanupErr) {
+                            console.warn(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Error cleaning up listeners:`,
+                                cleanupErr
+                            );
+                        }
+
+                        // App state changes
+                        if (AppState && typeof AppState.on === "function") {
+                            AppState.on("change:state", (_s, st) => {
+                                try {
+                                    // Update state in window for recovery purposes
+                                    window.__wwebjs_last_app_state = st;
+
+                                    // Use bridge directly for stability
+                                    if (
+                                        typeof window.__wwebjs_bridge ===
+                                        "function"
+                                    ) {
+                                        window.__wwebjs_bridge(
+                                            "auth_state",
+                                            st
+                                        );
+                                    }
+
+                                    safeEmit("onAuthAppStateChangedEvent", st);
+                                } catch (e) {
+                                    console.error(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Error in AppState state change handler:`,
+                                        e
+                                    );
+                                }
+                            });
+
+                            // Auth synced event
+                            AppState.on("change:hasSynced", () => {
+                                try {
+                                    if (AppState.hasSynced) {
+                                        if (
+                                            typeof window.__wwebjs_bridge ===
+                                            "function"
+                                        ) {
+                                            window.__wwebjs_bridge(
+                                                "auth_synced"
+                                            );
+                                        }
+                                        safeEmit("onAppStateHasSyncedEvent");
+                                    }
+                                } catch (e) {
+                                    console.error(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Error in AppState hasSynced change handler:`,
+                                        e
+                                    );
+                                }
+                            });
+                        }
+
+                        // Track last progress percentage in the browser context
+                        window.__wwebjs_last_progress =
+                            window.__wwebjs_last_progress || -1;
+
+                        // Offline progress updates
+                        if (
+                            Cmd &&
+                            typeof Cmd.on === "function" &&
+                            OfflineMessageHandler
+                        ) {
+                            Cmd.on("offline_progress_update", () => {
+                                try {
+                                    const progress =
+                                        OfflineMessageHandler.getOfflineDeliveryProgress();
+
+                                    // Only emit if progress has changed
+                                    if (
+                                        progress !==
+                                        window.__wwebjs_last_progress
+                                    ) {
+                                        window.__wwebjs_last_progress =
+                                            progress;
+
+                                        if (
+                                            typeof window.__wwebjs_bridge ===
+                                            "function"
+                                        ) {
+                                            window.__wwebjs_bridge(
+                                                "offline_progress",
+                                                progress
+                                            );
+                                        }
+
+                                        safeEmit(
+                                            "onOfflineProgressUpdateEvent",
+                                            progress
+                                        );
+                                    }
+                                } catch (e) {
+                                    console.error(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Error in offline_progress_update handler:`,
+                                        e
+                                    );
+                                }
+                            });
+                        }
+
+                        // Logout event
+                        if (Cmd && typeof Cmd.on === "function") {
+                            Cmd.on("logout", () => {
+                                try {
+                                    if (
+                                        typeof window.__wwebjs_bridge ===
+                                        "function"
+                                    ) {
+                                        window.__wwebjs_bridge("logout");
+                                    }
+                                    safeEmit("onLogoutEvent");
+                                } catch (e) {
+                                    console.error(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Error in logout handler:`,
+                                        e
+                                    );
+                                }
+                            });
+                        }
+
+                        return true;
+                    } catch (outerError) {
+                        console.error(
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] Fatal error setting up auth hooks:`,
+                            outerError
+                        );
+                        return false;
                     }
                 }
-            );
 
-            await exposeFunctionIfAbsent(
-                this.pupPage,
-                "onAppStateHasSyncedEvent",
-                async () => {
-                    const authEventPayload =
-                        await this.authStrategy.getAuthEventPayload();
-                    /**
-                     * Emitted when authentication is successful
-                     * @event Client#authenticated
-                     */
-                    this.emit(Events.AUTHENTICATED, authEventPayload);
+                // Expose setupAuthHooks globally for potential recovery
+                window.setupAuthHooks = setupAuthHooks;
 
-                    const injected = await this.pupPage.evaluate(async () => {
-                        return (
-                            typeof window.Store !== "undefined" &&
-                            typeof window.WWebJS !== "undefined"
+                // Call the setup function immediately and check result
+                const setupSuccess = setupAuthHooks();
+                window.__wwebjs_authHooksInstalled = setupSuccess;
+
+                // Set up a periodic check to ensure hooks are still working
+                if (window.__wwebjs_hook_check) {
+                    clearInterval(window.__wwebjs_hook_check);
+                }
+
+                window.__wwebjs_hook_check = setInterval(() => {
+                    if (!window.AuthStore || !window.AuthStore.Cmd) {
+                        console.warn(
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] AuthStore or Cmd is missing, trying to re-setup hooks`
                         );
+                        const success = setupAuthHooks();
+                        window.__wwebjs_authHooksInstalled = success;
+                    }
+                }, 300000); // Check every 5 minutes
+
+                return setupSuccess;
+            });
+
+            // Clean up existing interval if it's running
+            if (this._authStoreCheckInterval) {
+                clearInterval(this._authStoreCheckInterval);
+            }
+
+            // Add a periodic page-level check from the Node.js side
+            this._authStoreCheckInterval = setInterval(async () => {
+                if (!this.pupPage || this.pupPage.isClosed()) {
+                    clearInterval(this._authStoreCheckInterval);
+                    return;
+                }
+
+                try {
+                    const authStoreExists = await this.pupPage.evaluate(() => {
+                        return !!window.AuthStore && !!window.AuthStore.Cmd;
                     });
 
-                    if (!injected) {
-                        if (
-                            this.options.webVersionCache.type === "local" &&
-                            this.currentIndexHtml
-                        ) {
-                            const { type: webCacheType, ...webCacheOptions } =
-                                this.options.webVersionCache;
-                            const webCache = WebCacheFactory.createWebCache(
-                                webCacheType,
-                                webCacheOptions
+                    if (!authStoreExists) {
+                        console.warn(
+                            `[${this.clientId}] AuthStore missing, re-exposing...`
+                        );
+                        await this.pupPage.evaluate(ExposeAuthStore);
+
+                        // Try to reinstall hooks
+                        await this.pupPage.evaluate((id) => {
+                            window.wwebjs_client_id = id; // Ensure client_id is available for subsequent browser-side logs
+                            window.__wwebjs_authHooksInstalled = false;
+                            if (typeof window.setupAuthHooks === "function") {
+                                const success = window.setupAuthHooks();
+                                window.__wwebjs_authHooksInstalled = success;
+                            }
+                        }, this.clientId);
+                    }
+
+                    // Also check if our event functions are still registered
+                    const funcStatus = await this.pupPage.evaluate(() => {
+                        const functions = [
+                            "onOfflineProgressUpdateEvent",
+                            "onAuthAppStateChangedEvent",
+                            "onAppStateHasSyncedEvent",
+                            "onLogoutEvent",
+                            "onQRChangedEvent",
+                        ];
+
+                        const status = {};
+                        functions.forEach((fn) => {
+                            status[fn] = typeof window[fn] === "function";
+                        });
+
+                        return status;
+                    });
+
+                    // Re-expose any missing functions
+                    for (const [funcName, exists] of Object.entries(
+                        funcStatus
+                    )) {
+                        if (!exists) {
+                            console.warn(
+                                `[${this.clientId}] Function ${funcName} is missing, re-exposing...`
                             );
 
-                            await webCache.persist(
-                                this.currentIndexHtml,
-                                version
-                            );
+                            // Re-expose the specific missing function
+                            switch (funcName) {
+                                case "onOfflineProgressUpdateEvent":
+                                    await this.pupPage.exposeFunction(
+                                        funcName,
+                                        (pct) => {
+                                            if (
+                                                pct !== this._lastLoadingPercent
+                                            ) {
+                                                this._lastLoadingPercent = pct;
+                                                this.emit(
+                                                    Events.LOADING_SCREEN,
+                                                    pct
+                                                );
+                                            }
+                                        }
+                                    );
+                                    break;
+                                case "onAuthAppStateChangedEvent":
+                                    await this.pupPage.exposeFunction(
+                                        funcName,
+                                        (state) => {
+                                            this.emit(
+                                                Events.STATE_CHANGED,
+                                                state
+                                            );
+                                            if (state === "UNPAIRED_IDLE") {
+                                                // refresh QR if phone unpaired itself
+                                                this.pupPage
+                                                    .evaluate(() => {
+                                                        if (
+                                                            window.Store &&
+                                                            window.Store.Cmd &&
+                                                            typeof window.Store
+                                                                .Cmd
+                                                                .refreshQR ===
+                                                                "function"
+                                                        ) {
+                                                            window.Store.Cmd.refreshQR();
+                                                        } else {
+                                                            console.warn(
+                                                                `[${
+                                                                    window.wwebjs_client_id ||
+                                                                    "default"
+                                                                }] Cannot refresh QR: Store.Cmd is not available`
+                                                            );
+                                                        }
+                                                    })
+                                                    .catch((err) => {
+                                                        console.error(
+                                                            `[${this.clientId}] Error refreshing QR:`,
+                                                            err
+                                                        );
+                                                    });
+                                            }
+                                        }
+                                    );
+                                    break;
+                                case "onAppStateHasSyncedEvent":
+                                    await this.pupPage.exposeFunction(
+                                        funcName,
+                                        async () => {
+                                            try {
+                                                const authEventPayload =
+                                                    await this.authStrategy.getAuthEventPayload();
+                                                this.emit(
+                                                    Events.AUTHENTICATED,
+                                                    authEventPayload
+                                                );
+
+                                                const injected =
+                                                    await this.pupPage.evaluate(
+                                                        async () => {
+                                                            return (
+                                                                typeof window.Store !==
+                                                                    "undefined" &&
+                                                                typeof window.WWebJS !==
+                                                                    "undefined"
+                                                            );
+                                                        }
+                                                    );
+
+                                                if (!injected) {
+                                                    // Inject store and other components
+                                                    const version =
+                                                        await this.getWWebVersion();
+                                                    const isCometOrAbove =
+                                                        parseInt(
+                                                            version.split(
+                                                                "."
+                                                            )?.[1]
+                                                        ) >= 3000;
+
+                                                    if (isCometOrAbove) {
+                                                        await this.pupPage.evaluate(
+                                                            ExposeStore
+                                                        );
+                                                    } else {
+                                                        await new Promise((r) =>
+                                                            setTimeout(r, 2000)
+                                                        );
+                                                        await this.pupPage.evaluate(
+                                                            ExposeLegacyStore
+                                                        );
+                                                    }
+
+                                                    await this.pupPage.waitForFunction(
+                                                        "window.Store != undefined"
+                                                    );
+
+                                                    this.info = new ClientInfo(
+                                                        this,
+                                                        await this.pupPage.evaluate(
+                                                            () => {
+                                                                return {
+                                                                    ...window.Store.Conn.serialize(),
+                                                                    wid: window.Store.User.getMeUser(),
+                                                                };
+                                                            }
+                                                        )
+                                                    );
+
+                                                    this.interface =
+                                                        new InterfaceController(
+                                                            this
+                                                        );
+                                                    await this.pupPage.evaluate(
+                                                        LoadUtils
+                                                    );
+                                                    await this.attachEventListeners();
+                                                    this._storeInjected = true;
+                                                }
+
+                                                this.emit(Events.READY);
+                                                this.authStrategy.afterAuthReady();
+                                            } catch (err) {
+                                                console.error(
+                                                    `[${this.clientId}] Error in onAppStateHasSyncedEvent:`,
+                                                    err
+                                                );
+                                            }
+                                        }
+                                    );
+                                    break;
+                                case "onLogoutEvent":
+                                    await this.pupPage.exposeFunction(
+                                        funcName,
+                                        async () => {
+                                            this.lastLoggedOut = true;
+                                            this.emit(
+                                                Events.DISCONNECTED,
+                                                "LOGOUT"
+                                            );
+                                            await this.destroy();
+                                        }
+                                    );
+                                    break;
+                                case "onQRChangedEvent":
+                                    await this.pupPage.exposeFunction(
+                                        funcName,
+                                        (qr) => {
+                                            this.emit(Events.QR_RECEIVED, qr);
+                                            if (this.options.qrMaxRetries > 0) {
+                                                qrRetries =
+                                                    (qrRetries || 0) + 1;
+                                                if (
+                                                    qrRetries >
+                                                    this.options.qrMaxRetries
+                                                ) {
+                                                    this.emit(
+                                                        Events.DISCONNECTED,
+                                                        "Max qrcode retries reached"
+                                                    );
+                                                    this.destroy().catch(
+                                                        (err) =>
+                                                            console.error(
+                                                                `[${this.clientId}] Error destroying after max QR retries:`,
+                                                                err
+                                                            )
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    );
+                                    break;
+                            }
                         }
-
-                        if (isCometOrAbove) {
-                            await this.pupPage.evaluate(ExposeStore);
-                        } else {
-                            // make sure all modules are ready before injection
-                            // 2 second delay after authentication makes sense and does not need to be made dyanmic or removed
-                            await new Promise((r) => setTimeout(r, 2000));
-                            await this.pupPage.evaluate(ExposeLegacyStore);
-                        }
-
-                        // Check window.Store Injection
-                        await this.pupPage.waitForFunction(
-                            "window.Store != undefined"
-                        );
-
-                        /**
-                         * Current connection information
-                         * @type {ClientInfo}
-                         */
-                        this.info = new ClientInfo(
-                            this,
-                            await this.pupPage.evaluate(() => {
-                                return {
-                                    ...window.Store.Conn.serialize(),
-                                    wid: window.Store.User.getMeUser(),
-                                };
-                            })
-                        );
-
-                        this.interface = new InterfaceController(this);
-
-                        //Load util functions (serializers, helper functions)
-                        await this.pupPage.evaluate(LoadUtils);
-
-                        await this.attachEventListeners();
                     }
-                    /**
-                     * Emitted when the client has initialized and is ready to receive messages.
-                     * @event Client#ready
-                     */
-                    this.emit(Events.READY);
-                    this.authStrategy.afterAuthReady();
-                }
-            );
-            let lastPercent = null;
-            await exposeFunctionIfAbsent(
-                this.pupPage,
-                "onOfflineProgressUpdateEvent",
-                async (percent) => {
-                    if (lastPercent !== percent) {
-                        lastPercent = percent;
-                        this.emit(Events.LOADING_SCREEN, percent, "WhatsApp"); // Message is hardcoded as "WhatsApp" for now
-                    }
-                }
-            );
-            await exposeFunctionIfAbsent(
-                this.pupPage,
-                "onLogoutEvent",
-                async () => {
-                    this.lastLoggedOut = true;
-                    await this.pupPage
-                        .waitForNavigation({ waitUntil: "load", timeout: 5000 })
-                        .catch((_) => _);
-                }
-            );
-            await this.pupPage.evaluate(() => {
-                window.AuthStore.AppState.on(
-                    "change:state",
-                    (_AppState, state) => {
-                        window.onAuthAppStateChangedEvent(state);
-                    }
-                );
-                window.AuthStore.AppState.on("change:hasSynced", () => {
-                    window.onAppStateHasSyncedEvent();
-                });
-                window.AuthStore.Cmd.on("offline_progress_update", () => {
-                    window.onOfflineProgressUpdateEvent(
-                        window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
+                } catch (err) {
+                    console.error(
+                        `[${this.clientId}] Error checking AuthStore:`,
+                        err
                     );
-                });
-                window.AuthStore.Cmd.on("logout", async () => {
-                    await window.onLogoutEvent();
-                });
-            });
+                }
+            }, 600000); // Check every 10 minutes
         } catch (err) {
             if (!hasReloaded) throw err;
+            console.error(
+                `[${this.clientId}] Error during injection (ignoring due to reload)`,
+                err
+            );
         } finally {
             this.pupPage.off("framenavigated", reloadHandler);
+            this.isInjecting = false;
         }
     }
 
