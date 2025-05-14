@@ -134,12 +134,12 @@ class Client extends EventEmitter {
         if (!this.pupPage || this.pupPage.isClosed()) return;
         this.isInjecting = true;
 
-        try {
-            let hasReloaded = false;
-            const reloadHandler = async () => {
-                hasReloaded = true;
-            };
+        let hasReloaded = false;
+        const reloadHandler = async () => {
+            hasReloaded = true;
+        };
 
+        try {
             this.pupPage.on("framenavigated", reloadHandler);
 
             // First, let's clean up any existing hooks to prevent duplication
