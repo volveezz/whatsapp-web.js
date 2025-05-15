@@ -1819,66 +1819,61 @@ class Client extends EventEmitter {
                 let finished = false;
                 let timers = [];
                 let timeout;
-                let resolveMain, rejectMain;
-                const resultPromise = new Promise((resolve, reject) => {
-                    resolveMain = resolve;
-                    rejectMain = reject;
-                });
-
-                async function attempt(tweak) {
-                    if (finished) return;
-                    let file = document.getElementById(id)?.files?.[0];
-                    if (!file) return;
-
-                    // Tweaking the file to change its hash since whatsapp would deduplicate requests with the same one
-                    if (tweak) file = await tweakFile(file);
-                    try {
-                        const data = await window.WWebJS.processMediaData(
-                            file,
-                            options
-                        );
-                        if (!finished) {
-                            finished = true;
-                            if (!window.WWebJS.preparedMediaMap)
-                                window.WWebJS.preparedMediaMap = {};
-                            window.WWebJS.preparedMediaMap[id] = data;
-                            timers.forEach(clearTimeout);
-                            clearTimeout(timeout);
-                            resolveMain(data);
-                        }
-                    } catch (e) {
-                        //
-                    }
-                }
-
-                attempt(false);
-
-                function scheduleNext() {
-                    if (finished) return;
-                    attempt(true);
-                    const t = setTimeout(scheduleNext, 20000);
-                    timers.push(t);
-                }
-
-                const firstTimer = setTimeout(scheduleNext, 20000);
-                timers.push(firstTimer);
-
-                timeout = setTimeout(() => {
-                    if (!finished) {
-                        finished = true;
-                        timers.forEach(clearTimeout);
-                        rejectMain(
-                            new Error("Media upload timed out after 120s")
-                        );
-                    }
-                }, 120_000);
-
-                const cleanup = () => {
+                function cleanup() {
                     document.getElementById(id)?.remove();
-                };
+                }
+                try {
+                    return await new Promise((resolve, reject) => {
+                        async function attempt(tweak) {
+                            if (finished) return;
+                            let file = document.getElementById(id)?.files?.[0];
+                            if (!file) return;
 
-                resultPromise.finally(cleanup);
-                await resultPromise;
+                            // Tweaking the file to change its hash since whatsapp would deduplicate requests with the same one
+                            if (tweak) file = await tweakFile(file);
+
+                            try {
+                                const data =
+                                    await window.WWebJS.processMediaData(
+                                        file,
+                                        options
+                                    );
+                                if (!finished) {
+                                    finished = true;
+                                    if (!window.WWebJS.preparedMediaMap)
+                                        window.WWebJS.preparedMediaMap = {};
+                                    window.WWebJS.preparedMediaMap[id] = data;
+                                    timers.forEach(clearTimeout);
+                                    clearTimeout(timeout);
+                                    cleanup();
+                                    resolve(data);
+                                }
+                            } catch (e) {
+                                //
+                            }
+                        }
+                        attempt(false);
+                        function scheduleNext() {
+                            if (finished) return;
+                            attempt(true);
+                            const t = setTimeout(scheduleNext, 20000);
+                            timers.push(t);
+                        }
+                        const firstTimer = setTimeout(scheduleNext, 20000);
+                        timers.push(firstTimer);
+                        timeout = setTimeout(() => {
+                            if (!finished) {
+                                finished = true;
+                                timers.forEach(clearTimeout);
+                                cleanup();
+                                reject("Media upload timed out after 120s");
+                            }
+                        }, 120_000);
+                    });
+                } catch (err) {
+                    cleanup();
+                    throw new Error(err);
+                }
             },
             inputId,
             options,
