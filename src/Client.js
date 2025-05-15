@@ -1801,6 +1801,8 @@ class Client extends EventEmitter {
     async prepareMedia(filePath, uniqueId, options = {}) {
         const sanitizedUniqueId = uniqueId.replace(/[^a-zA-Z0-9_]/g, "_");
         const inputId = `wwebjs-upload-${sanitizedUniqueId}`;
+
+        // Create input element in browser
         await this.pupPage.evaluate((id) => {
             const input = document.createElement("input");
             input.type = "file";
@@ -1812,20 +1814,7 @@ class Client extends EventEmitter {
         const input = await this.pupPage.$(`#${inputId}`);
         await input.uploadFile(filePath);
 
-        const tweakFileStr = `
-        async function(f, attempt) {
-            const b = await f.arrayBuffer();
-            const x = new Uint8Array([Math.floor(Math.random()*256)]);
-            const n = new Uint8Array(b.byteLength + 1);
-            n.set(new Uint8Array(b), 0);
-            n.set(x, b.byteLength);
-            // File renaming: filename_retryN.ext
-            let name = f.name, i = name.lastIndexOf('.'), base = i !== -1 ? name.slice(0, i) : name, ext = i !== -1 ? name.slice(i) : '';
-            let newName = base + '_retry' + attempt + ext;
-            return new File([n], newName, {type: f.type});
-        }
-    `;
-
+        // Race browser logic against the abort signal outside
         let abortListener;
         const abortPromise = new Promise((_, reject) => {
             if (options.signal) {
@@ -1835,96 +1824,55 @@ class Client extends EventEmitter {
         });
 
         const mainPromise = this.pupPage.evaluate(
-            async (id, options, tweakFileSrc) => {
-                const tweakFile = eval("(" + tweakFileSrc + ")");
+            async (id, options) => {
                 let finished = false;
-                let timers = [];
                 let timeout;
-                let attempts = 1;
-                let originalFile = document.getElementById(id)?.files?.[0];
-                if (!originalFile) throw new Error("No file found in input");
+                try {
+                    const file = document.getElementById(id)?.files?.[0];
+                    if (!file) throw new Error("No file found in input");
 
-                let abortHandler;
-                if (options.signal) {
-                    abortHandler = () => {
+                    timeout = setTimeout(() => {
                         if (!finished) {
                             finished = true;
-                            timers.forEach(clearTimeout);
-                            clearTimeout(timeout);
                             document.getElementById(id)?.remove();
-                            throw new Error("Aborted by signal");
-                        }
-                    };
-                    options.signal.addEventListener("abort", abortHandler);
-                }
-
-                async function runAttempt(file) {
-                    if (finished) return;
-                    try {
-                        const data = await window.WWebJS.processMediaData(
-                            file,
-                            options
-                        );
-                        if (!finished) {
-                            finished = true;
-                            if (!window.WWebJS.preparedMediaMap)
-                                window.WWebJS.preparedMediaMap = {};
-                            window.WWebJS.preparedMediaMap[id] = data;
-                            timers.forEach(clearTimeout);
-                            clearTimeout(timeout);
-                            document.getElementById(id)?.remove();
-                            if (abortHandler && options.signal)
-                                options.signal.removeEventListener(
-                                    "abort",
-                                    abortHandler
-                                );
-                            return;
-                        }
-                    } catch (e) {
-                        //
-                    }
-                }
-
-                runAttempt(originalFile);
-
-                function scheduleNextAttempt() {
-                    if (finished) return;
-                    tweakFile(originalFile, attempts++).then(runAttempt);
-                    timers.push(setTimeout(scheduleNextAttempt, 20000));
-                }
-                timers.push(setTimeout(scheduleNextAttempt, 20000));
-
-                timeout = setTimeout(() => {
-                    if (!finished) {
-                        finished = true;
-                        timers.forEach(clearTimeout);
-                        if (abortHandler && options.signal)
-                            options.signal.removeEventListener(
-                                "abort",
-                                abortHandler
+                            throw new Error(
+                                "Media upload timed out after 120s"
                             );
-                        document.getElementById(id)?.remove();
-                        throw new Error("Media upload timed out after 120s");
-                    }
-                }, 120000);
+                        }
+                    }, 120000);
 
-                while (!finished)
-                    await new Promise((res) => setTimeout(res, 100));
-                if (!window.WWebJS.preparedMediaMap?.[id])
-                    throw new Error("Media upload failed");
-                return true;
+                    const data = await window.WWebJS.processMediaData(
+                        file,
+                        options
+                    );
+                    if (!window.WWebJS.preparedMediaMap)
+                        window.WWebJS.preparedMediaMap = {};
+                    window.WWebJS.preparedMediaMap[id] = data;
+                    finished = true;
+                    return true;
+                } finally {
+                    clearTimeout(timeout);
+                    document.getElementById(id)?.remove();
+                }
             },
             inputId,
-            options,
-            tweakFileStr
+            options
         );
 
+        // Race the promises: if abort wins, cleanup input in Node. If not, continue.
         try {
             await Promise.race([mainPromise, abortPromise]);
         } finally {
             if (options.signal && abortListener) {
                 options.signal.removeEventListener("abort", abortListener);
             }
+            try {
+                await input.dispose();
+            } catch {}
+            await this.pupPage.evaluate((id) => {
+                const el = document.getElementById(id);
+                if (el) el.remove();
+            }, inputId);
         }
 
         return inputId;
