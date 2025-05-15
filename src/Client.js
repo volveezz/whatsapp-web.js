@@ -1800,7 +1800,6 @@ class Client extends EventEmitter {
     async prepareMedia(filePath, uniqueId, options = {}) {
         const sanitizedUniqueId = uniqueId.replace(/[^a-zA-Z0-9_]/g, "_");
         const inputId = `wwebjs-upload-${sanitizedUniqueId}`;
-
         await this.pupPage.evaluate((id) => {
             const input = document.createElement("input");
             input.type = "file";
@@ -1812,24 +1811,78 @@ class Client extends EventEmitter {
         const input = await this.pupPage.$(`#${inputId}`);
         await input.uploadFile(filePath);
 
-        await this.pupPage.evaluate(
-            async (id, options) => {
-                const file = document.getElementById(id).files[0];
+        const tweakFileStr = `async function(f){const b=await f.arrayBuffer(),x=new Uint8Array([Math.floor(Math.random()*256)]),n=new Uint8Array(b.byteLength+1);n.set(new Uint8Array(b),0);n.set(x,b.byteLength);return new File([n],f.name,{type:f.type})}`;
 
-                try {
-                    const data = await window.WWebJS.processMediaData(
-                        file,
-                        options
-                    );
-                    if (!window.WWebJS.preparedMediaMap)
-                        window.WWebJS.preparedMediaMap = {};
-                    window.WWebJS.preparedMediaMap[id] = data;
-                } finally {
-                    document.getElementById(id)?.remove();
+        await this.pupPage.evaluate(
+            async (id, options, tweakFileSrc) => {
+                const tweakFile = eval("(" + tweakFileSrc + ")");
+                let finished = false;
+                let timers = [];
+                let timeout;
+                let resolveMain, rejectMain;
+                const resultPromise = new Promise((resolve, reject) => {
+                    resolveMain = resolve;
+                    rejectMain = reject;
+                });
+
+                async function attempt(tweak) {
+                    if (finished) return;
+                    let file = document.getElementById(id)?.files?.[0];
+                    if (!file) return;
+
+                    // Tweaking the file to change its hash since whatsapp would deduplicate requests with the same one
+                    if (tweak) file = await tweakFile(file);
+                    try {
+                        const data = await window.WWebJS.processMediaData(
+                            file,
+                            options
+                        );
+                        if (!finished) {
+                            finished = true;
+                            if (!window.WWebJS.preparedMediaMap)
+                                window.WWebJS.preparedMediaMap = {};
+                            window.WWebJS.preparedMediaMap[id] = data;
+                            timers.forEach(clearTimeout);
+                            clearTimeout(timeout);
+                            resolveMain(data);
+                        }
+                    } catch (e) {
+                        //
+                    }
                 }
+
+                attempt(false);
+
+                function scheduleNext() {
+                    if (finished) return;
+                    attempt(true);
+                    const t = setTimeout(scheduleNext, 20000);
+                    timers.push(t);
+                }
+
+                const firstTimer = setTimeout(scheduleNext, 20000);
+                timers.push(firstTimer);
+
+                timeout = setTimeout(() => {
+                    if (!finished) {
+                        finished = true;
+                        timers.forEach(clearTimeout);
+                        rejectMain(
+                            new Error("Media upload timed out after 120s")
+                        );
+                    }
+                }, 120_000);
+
+                const cleanup = () => {
+                    document.getElementById(id)?.remove();
+                };
+
+                resultPromise.finally(cleanup);
+                await resultPromise;
             },
             inputId,
-            options
+            options,
+            tweakFileStr
         );
 
         return inputId;

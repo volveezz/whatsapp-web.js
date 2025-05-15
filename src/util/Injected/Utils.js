@@ -527,22 +527,18 @@ exports.LoadUtils = () => {
             mediaData.waveform =
                 waveform ?? (await window.WWebJS.generateWaveform(file));
         }
-
         if (forceGif && mediaData.type === "video") {
             mediaData.isGif = true;
         }
-
         if (forceDocument) {
             mediaData.type = "document";
         }
-
         if (!(mediaData.mediaBlob instanceof window.Store.OpaqueData)) {
             mediaData.mediaBlob = await window.Store.OpaqueData.createFromData(
                 mediaData.mediaBlob,
                 mediaData.mediaBlob.type
             );
         }
-
         console.log(
             `${logPrefix} [WWebJS:processMediaData] Creating RenderableUrl`
         );
@@ -550,144 +546,22 @@ exports.LoadUtils = () => {
         mediaObject.consolidate(mediaData.toJSON());
         mediaData.mediaBlob.autorelease();
 
+        const start = Date.now();
+
         console.log(`${logPrefix} [WWebJS:processMediaData] Uploading Media`);
+        const uploadedMedia = await window.Store.MediaUpload.uploadMedia({
+            mimetype: mediaData.mimetype,
+            mediaObject,
+            mediaType,
+        });
 
-        // Function to create a single upload attempt
-        const createUploadAttempt = () => {
-            return window.Store.MediaUpload.uploadMedia({
-                mimetype: mediaData.mimetype,
-                mediaObject,
-                mediaType,
-            });
-        };
+        const end = Date.now();
 
-        // Handle upload with multiple retries over 120 seconds
-        const handleUploadWithRetries = async () => {
-            const startTime = Date.now();
-            const totalTimeoutMs = 120000; // 120 seconds total
-            const newAttemptIntervalMs = 30000; // Start a new upload attempt every 30 seconds
-
-            return new Promise((resolve, reject) => {
-                let hasSettled = false;
-                let intervalTimerId = null;
-                let overallTimeoutTimerId = null;
-
-                const cleanupTimers = () => {
-                    if (intervalTimerId) clearInterval(intervalTimerId);
-                    if (overallTimeoutTimerId)
-                        clearTimeout(overallTimeoutTimerId);
-                };
-
-                const settlePromise = (action, value) => {
-                    if (!hasSettled) {
-                        hasSettled = true;
-                        cleanupTimers();
-                        action(value);
-                    }
-                };
-
-                const handleSuccessfulUpload = (result) => {
-                    console.log(
-                        `${logPrefix} [WWebJS:processMediaData] Media upload successful. Elapsed: ${
-                            (Date.now() - startTime) / 1000
-                        }s`
-                    );
-                    settlePromise(resolve, result);
-                };
-
-                const handleFailedAttempt = (error) => {
-                    console.warn(
-                        `${logPrefix} [WWebJS:processMediaData] A media upload attempt failed: ${
-                            error?.message || String(error)
-                        }. Retrying if time permits.`
-                    );
-                    // Do not reject the main promise here; wait for success or overall timeout.
-                };
-
-                const attemptUpload = () => {
-                    if (
-                        hasSettled ||
-                        Date.now() - startTime >= totalTimeoutMs
-                    ) {
-                        // If already settled, or if total time is up, don't launch new attempts.
-                        if (
-                            intervalTimerId &&
-                            Date.now() - startTime >= totalTimeoutMs
-                        ) {
-                            clearInterval(intervalTimerId); // Defensive: stop interval if running past timeout
-                        }
-                        return;
-                    }
-
-                    console.log(
-                        `${logPrefix} [WWebJS:processMediaData] Launching new media upload attempt. Total elapsed: ${
-                            (Date.now() - startTime) / 1000
-                        }s`
-                    );
-                    try {
-                        // createUploadAttempt() is defined in the parent scope.
-                        const uploadPromise = createUploadAttempt();
-                        uploadPromise
-                            .then(handleSuccessfulUpload)
-                            .catch(handleFailedAttempt);
-                    } catch (error) {
-                        // This catch is for synchronous errors in calling createUploadAttempt itself.
-                        console.error(
-                            `${logPrefix} [WWebJS:processMediaData] Critical error during launch of upload attempt: ${
-                                error?.message || String(error)
-                            }`
-                        );
-                        // This particular attempt won't proceed. Relies on subsequent attempts or overall timeout.
-                    }
-                };
-
-                // Initiate the first attempt.
-                attemptUpload();
-
-                // Schedule subsequent attempts if the total timeout allows for more than one attempt interval.
-                if (totalTimeoutMs > newAttemptIntervalMs) {
-                    intervalTimerId = setInterval(() => {
-                        // Stop scheduling new attempts if already settled or if not enough time for a new attempt to be meaningful.
-                        // Check (totalTimeoutMs - newAttemptIntervalMs / 2) to give some buffer.
-                        if (
-                            hasSettled ||
-                            Date.now() - startTime >=
-                                totalTimeoutMs - newAttemptIntervalMs / 2
-                        ) {
-                            clearInterval(intervalTimerId);
-                            intervalTimerId = null; // Mark as cleared
-                            return;
-                        }
-                        attemptUpload();
-                    }, newAttemptIntervalMs);
-                }
-
-                // Set an overall timeout for the entire retry operation.
-                overallTimeoutTimerId = setTimeout(() => {
-                    // This timeout fires if no attempt has succeeded within totalTimeoutMs.
-                    if (!hasSettled) {
-                        // Check hasSettled again, as an attempt might resolve just before this timeout.
-                        const elapsedTimeS = (Date.now() - startTime) / 1000;
-                        console.error(
-                            `${logPrefix} [WWebJS:processMediaData] Media upload failed after all retries. Total time: ${elapsedTimeS}s.`
-                        );
-                        settlePromise(
-                            reject,
-                            new Error(
-                                `Media upload timed out after ${
-                                    totalTimeoutMs / 1000
-                                } seconds. All attempts failed. File: ${fileIdentifier}`
-                            )
-                        );
-                    }
-                }, totalTimeoutMs);
-            });
-        };
-
-        // Attempt uploads with retry strategy
-        const uploadedMedia = await handleUploadWithRetries();
-
-        console.log(`${logPrefix} [WWebJS:processMediaData] Uploaded Media`);
+        console.log(
+            `${logPrefix} [WWebJS:processMediaData] Uploaded Media, took ${
+                end - start
+            } ms`
+        );
         const mediaEntry = uploadedMedia.mediaEntry;
         if (!mediaEntry) {
             throw new Error(
