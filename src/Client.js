@@ -1819,61 +1819,60 @@ class Client extends EventEmitter {
                 let finished = false;
                 let timers = [];
                 let timeout;
-                function cleanup() {
-                    document.getElementById(id)?.remove();
+                let originalFile = document.getElementById(id)?.files?.[0];
+                if (!originalFile) throw new Error("No file found in input");
+                async function runAttempt(file) {
+                    try {
+                        const start = performance.now();
+                        const data = await window.WWebJS.processMediaData(
+                            file,
+                            options
+                        );
+                        const elapsed = performance.now() - start;
+                        console.log(
+                            `[WWebJS:processMediaData] Uploaded Media, took ${
+                                elapsed | 0
+                            } ms`
+                        );
+                        if (!finished) {
+                            finished = true;
+                            if (!window.WWebJS.preparedMediaMap)
+                                window.WWebJS.preparedMediaMap = {};
+                            window.WWebJS.preparedMediaMap[id] = data;
+                            timers.forEach(clearTimeout);
+                            clearTimeout(timeout);
+                        }
+                    } catch (e) {}
                 }
-                try {
-                    return await new Promise((resolve, reject) => {
-                        async function attempt(tweak) {
-                            if (finished) return;
-                            let file = document.getElementById(id)?.files?.[0];
-                            if (!file) return;
+                runAttempt(originalFile);
 
-                            // Tweaking the file to change its hash since whatsapp would deduplicate requests with the same one
-                            if (tweak) file = await tweakFile(file);
+                function scheduleNextAttempt() {
+                    if (finished) return;
+                    tweakFile(originalFile).then(runAttempt);
+                    timers.push(setTimeout(scheduleNextAttempt, 20000));
+                }
+                timers.push(setTimeout(scheduleNextAttempt, 20000));
 
-                            try {
-                                const data =
-                                    await window.WWebJS.processMediaData(
-                                        file,
-                                        options
-                                    );
-                                if (!finished) {
-                                    finished = true;
-                                    if (!window.WWebJS.preparedMediaMap)
-                                        window.WWebJS.preparedMediaMap = {};
-                                    window.WWebJS.preparedMediaMap[id] = data;
-                                    timers.forEach(clearTimeout);
-                                    clearTimeout(timeout);
-                                    cleanup();
-                                    resolve(data);
-                                }
-                            } catch (e) {
-                                //
-                            }
-                        }
-                        attempt(false);
-                        function scheduleNext() {
-                            if (finished) return;
-                            attempt(true);
-                            const t = setTimeout(scheduleNext, 20000);
-                            timers.push(t);
-                        }
-                        const firstTimer = setTimeout(scheduleNext, 20000);
-                        timers.push(firstTimer);
-                        timeout = setTimeout(() => {
-                            if (!finished) {
-                                finished = true;
-                                timers.forEach(clearTimeout);
-                                cleanup();
-                                reject("Media upload timed out after 120s");
-                            }
-                        }, 120_000);
-                    });
-                } catch (err) {
+                timeout = setTimeout(() => {
+                    if (!finished) {
+                        finished = true;
+                        timers.forEach(clearTimeout);
+                        throw new Error("Media upload timed out after 120s");
+                    }
+                }, 120000);
+
+                const cleanup = () => document.getElementById(id)?.remove();
+                (async () => {
+                    while (!finished)
+                        await new Promise((res) => setTimeout(res, 100));
                     cleanup();
-                    throw new Error(err);
-                }
+                })();
+
+                while (!finished)
+                    await new Promise((res) => setTimeout(res, 100));
+                if (!window.WWebJS.preparedMediaMap?.[id])
+                    throw new Error("Media upload failed");
+                return true;
             },
             inputId,
             options,
