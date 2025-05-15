@@ -1795,6 +1795,7 @@ class Client extends EventEmitter {
      * @param {boolean} [options.forceVoice=false] - Force the media to be sent as a voice message.
      * @param {boolean} [options.forceDocument=false] - Force the media to be sent as a document.
      * @param {boolean} [options.forceGif=false] - Force the media to be sent as a GIF.
+     * @param {AbortSignal} [options.signal] - Abort signal to kill all attempts
      * @returns {Promise<string>} The ID of the input element.
      */
     async prepareMedia(filePath, uniqueId, options = {}) {
@@ -1811,28 +1812,58 @@ class Client extends EventEmitter {
         const input = await this.pupPage.$(`#${inputId}`);
         await input.uploadFile(filePath);
 
-        const tweakFileStr = `async function(f){const b=await f.arrayBuffer(),x=new Uint8Array([Math.floor(Math.random()*256)]),n=new Uint8Array(b.byteLength+1);n.set(new Uint8Array(b),0);n.set(x,b.byteLength);return new File([n],f.name,{type:f.type})}`;
+        const tweakFileStr = `
+        async function(f, attempt) {
+            const b = await f.arrayBuffer();
+            const x = new Uint8Array([Math.floor(Math.random()*256)]);
+            const n = new Uint8Array(b.byteLength + 1);
+            n.set(new Uint8Array(b), 0);
+            n.set(x, b.byteLength);
+            // File renaming: filename_retryN.ext
+            let name = f.name, i = name.lastIndexOf('.'), base = i !== -1 ? name.slice(0, i) : name, ext = i !== -1 ? name.slice(i) : '';
+            let newName = base + '_retry' + attempt + ext;
+            return new File([n], newName, {type: f.type});
+        }
+    `;
 
-        await this.pupPage.evaluate(
+        let abortListener;
+        const abortPromise = new Promise((_, reject) => {
+            if (options.signal) {
+                abortListener = () => reject(new Error("Aborted by signal"));
+                options.signal.addEventListener("abort", abortListener);
+            }
+        });
+
+        const mainPromise = this.pupPage.evaluate(
             async (id, options, tweakFileSrc) => {
                 const tweakFile = eval("(" + tweakFileSrc + ")");
                 let finished = false;
                 let timers = [];
                 let timeout;
+                let attempts = 1;
                 let originalFile = document.getElementById(id)?.files?.[0];
                 if (!originalFile) throw new Error("No file found in input");
+
+                let abortHandler;
+                if (options.signal) {
+                    abortHandler = () => {
+                        if (!finished) {
+                            finished = true;
+                            timers.forEach(clearTimeout);
+                            clearTimeout(timeout);
+                            document.getElementById(id)?.remove();
+                            throw new Error("Aborted by signal");
+                        }
+                    };
+                    options.signal.addEventListener("abort", abortHandler);
+                }
+
                 async function runAttempt(file) {
+                    if (finished) return;
                     try {
-                        const start = performance.now();
                         const data = await window.WWebJS.processMediaData(
                             file,
                             options
-                        );
-                        const elapsed = performance.now() - start;
-                        console.log(
-                            `[WWebJS:processMediaData] Uploaded Media, took ${
-                                elapsed | 0
-                            } ms`
                         );
                         if (!finished) {
                             finished = true;
@@ -1841,14 +1872,24 @@ class Client extends EventEmitter {
                             window.WWebJS.preparedMediaMap[id] = data;
                             timers.forEach(clearTimeout);
                             clearTimeout(timeout);
+                            document.getElementById(id)?.remove();
+                            if (abortHandler && options.signal)
+                                options.signal.removeEventListener(
+                                    "abort",
+                                    abortHandler
+                                );
+                            return;
                         }
-                    } catch (e) {}
+                    } catch (e) {
+                        //
+                    }
                 }
+
                 runAttempt(originalFile);
 
                 function scheduleNextAttempt() {
                     if (finished) return;
-                    tweakFile(originalFile).then(runAttempt);
+                    tweakFile(originalFile, attempts++).then(runAttempt);
                     timers.push(setTimeout(scheduleNextAttempt, 20000));
                 }
                 timers.push(setTimeout(scheduleNextAttempt, 20000));
@@ -1857,16 +1898,15 @@ class Client extends EventEmitter {
                     if (!finished) {
                         finished = true;
                         timers.forEach(clearTimeout);
+                        if (abortHandler && options.signal)
+                            options.signal.removeEventListener(
+                                "abort",
+                                abortHandler
+                            );
+                        document.getElementById(id)?.remove();
                         throw new Error("Media upload timed out after 120s");
                     }
                 }, 120000);
-
-                const cleanup = () => document.getElementById(id)?.remove();
-                (async () => {
-                    while (!finished)
-                        await new Promise((res) => setTimeout(res, 100));
-                    cleanup();
-                })();
 
                 while (!finished)
                     await new Promise((res) => setTimeout(res, 100));
@@ -1878,6 +1918,14 @@ class Client extends EventEmitter {
             options,
             tweakFileStr
         );
+
+        try {
+            await Promise.race([mainPromise, abortPromise]);
+        } finally {
+            if (options.signal && abortListener) {
+                options.signal.removeEventListener("abort", abortListener);
+            }
+        }
 
         return inputId;
     }

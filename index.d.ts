@@ -147,6 +147,10 @@ declare namespace WAWebJS {
          * @param filePath The path to the media file.
          * @param uniqueId A unique identifier for the media.
          * @param options Additional options.
+         * @param options.forceVoice Force the media to be sent as a voice message.
+         * @param options.forceDocument Force the media to be sent as a document.
+         * @param options.forceGif Force the media to be sent as a GIF.
+         * @param options.signal Optional AbortSignal to abort the operation.
          */
         prepareMedia(
             filePath: string,
@@ -155,6 +159,7 @@ declare namespace WAWebJS {
                 forceVoice?: boolean;
                 forceDocument?: boolean;
                 forceGif?: boolean;
+                signal?: AbortSignal;
             }
         ): Promise<object>;
 
