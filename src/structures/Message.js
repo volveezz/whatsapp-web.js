@@ -795,6 +795,14 @@ class Message extends Base {
             result.path = `${result.path}.${result.mimetype.split("/")[1]}`;
         }
 
+        if (result.mimetype.includes(";")) {
+            result.mimetype = result.mimetype.split(";")[0];
+        }
+
+        if (result.path.includes(";")) {
+            result.path = result.path.split(";")[0];
+        }
+
         return result;
     }
 
