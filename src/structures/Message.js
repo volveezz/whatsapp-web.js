@@ -678,17 +678,14 @@ class Message extends Base {
                         while (
                             msg.mediaData.mediaStage !== "RESOLVED" &&
                             !msg.mediaData.mediaStage.includes("ERROR") &&
-                            tries++ < 10
+                            tries++ < 120 // 120 retries = 60 seconds
                         ) {
                             console.log(
-                                `${logPrefix} Retry ${tries}: mediaStage is ${msg.mediaData.mediaStage}. Waiting 300ms.`
+                                `${logPrefix} Retry ${tries}: mediaStage is ${msg.mediaData.mediaStage}. Waiting 500ms.`
                             );
-                            await new Promise((res) => setTimeout(res, 300));
+                            await new Promise((res) => setTimeout(res, 500));
                         }
 
-                        console.log(
-                            `${logPrefix} After retry loop, mediaStage: ${msg.mediaData.mediaStage}`
-                        );
                         if (msg.mediaData.mediaStage !== "RESOLVED") {
                             console.error(
                                 `${logPrefix} mediaStage still not RESOLVED after retries: ${msg.mediaData.mediaStage}`
