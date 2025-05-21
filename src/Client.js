@@ -37,6 +37,7 @@ const {
 const NoAuth = require("./authStrategies/NoAuth");
 const { exposeFunctionIfAbsent } = require("./util/Puppeteer");
 const treeKill = require("tree-kill");
+const { debounce } = require("./util/debounce");
 
 /**
  * SendMessageError represents an error that occurred during message sending
@@ -108,6 +109,8 @@ class Client extends EventEmitter {
 
         this.authStrategy.setup(this);
 
+        this.debouncedInject = debounce(this.inject.bind(this), 500);
+
         /**
          * @type {puppeteer.Browser}
          */
@@ -131,257 +134,608 @@ class Client extends EventEmitter {
      * Private function
      */
     async inject() {
-        await this.pupPage.waitForFunction(
-            "window.Debug?.VERSION != undefined",
-            { timeout: this.options.authTimeoutMs }
-        );
+        if (this.isInjecting) return;
+        if (!this.pupPage || this.pupPage.isClosed()) return;
+        this.isInjecting = true;
 
-        const version = await this.getWWebVersion();
-        const isCometOrAbove = parseInt(version.split(".")?.[1]) >= 3000;
+        try {
+            /*───────────────── preload stub ─────────────────*/
+            if (!this._bridgePreloaded) {
+                await this.pupPage.evaluateOnNewDocument(() => {
+                    if (window.__wwebjs_preload_done) return;
+                    window.__wwebjs_preload_done = true;
 
-        if (isCometOrAbove) {
-            await this.pupPage.evaluate(ExposeAuthStore);
-        } else {
-            await this.pupPage.evaluate(
-                ExposeLegacyAuthStore,
-                moduleRaid.toString()
-            );
-        }
+                    // Track last loading progress to prevent duplicate events
+                    window.__wwebjs_last_progress = -1;
 
-        const needAuthentication = await this.pupPage.evaluate(async () => {
-            let state = window.AuthStore.AppState.state;
+                    // Create persistent placeholder functions that will survive page changes
+                    // Use a more resilient approach with Object.defineProperty to prevent overwriting
+                    const persistentFunctions = [
+                        "onOfflineProgressUpdateEvent",
+                        "onAuthAppStateChangedEvent",
+                        "onAppStateHasSyncedEvent",
+                        "onLogoutEvent",
+                        "onQRChangedEvent",
+                    ];
 
-            if (
-                state === "OPENING" ||
-                state === "UNLAUNCHED" ||
-                state === "PAIRING"
-            ) {
-                // wait till state changes
-                await new Promise((r) => {
-                    window.AuthStore.AppState.on(
-                        "change:state",
-                        function waitTillInit(_AppState, state) {
-                            if (
-                                state !== "OPENING" &&
-                                state !== "UNLAUNCHED" &&
-                                state !== "PAIRING"
-                            ) {
-                                window.AuthStore.AppState.off(
-                                    "change:state",
-                                    waitTillInit
-                                );
-                                r();
-                            }
+                    persistentFunctions.forEach((fn) => {
+                        // Only define if it doesn't exist
+                        if (!window[fn]) {
+                            // Use a property descriptor to make it harder to accidentally overwrite
+                            Object.defineProperty(window, fn, {
+                                value: function (...args) {
+                                    console.log(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Placeholder for ${fn} called with:`,
+                                        args
+                                    );
+                                },
+                                writable: true, // Allow our code to redefine it later
+                                configurable: false, // Prevent deletion
+                            });
                         }
-                    );
+                    });
+
+                    // Add a recovery mechanism that periodically checks and restores these functions
+                    window.__wwebjs_check_functions = setInterval(() => {
+                        persistentFunctions.forEach((fn) => {
+                            if (typeof window[fn] !== "function") {
+                                console.warn(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] Function ${fn} was lost, restoring placeholder`
+                                );
+                                window[fn] = function (...args) {
+                                    console.log(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Restored placeholder for ${fn} called with:`,
+                                        args
+                                    );
+                                };
+                            }
+                        });
+                    }, 300000); // Check every 5 minutes
+
+                    window.__wwebjs_ready = false;
+                    window.__wwebjs_q = [];
+                    window.__wwebjs_bridge = (...args) => {
+                        if (!window.__wwebjs_ready)
+                            return window.__wwebjs_q.push(args);
+                        if (typeof window.__wwebjs_emit === "function")
+                            window.__wwebjs_emit(...args);
+                    };
+                    window.__wwebjs_emit = (...args) =>
+                        window.__wwebjs_bridge(...args);
                 });
+                this._bridgePreloaded = true;
             }
-            state = window.AuthStore.AppState.state;
-            return state == "UNPAIRED" || state == "UNPAIRED_IDLE";
-        });
 
-        if (needAuthentication) {
-            const { failed, failureEventPayload, restart } =
-                await this.authStrategy.onAuthenticationNeeded();
-
-            if (failed) {
-                /**
-                 * Emitted when there has been an error while trying to restore an existing session
-                 * @event Client#auth_failure
-                 * @param {string} message
-                 */
-                this.emit(Events.AUTHENTICATION_FAILURE, failureEventPayload);
-                await this.destroy();
-                if (restart) {
-                    // session restore failed so try again but without session to force new authentication
-                    return this.initialize();
+            /*───────────────── wait for core WA objects ─────────────────*/
+            await this.pupPage.waitForFunction(
+                "window.Debug && window.Debug.VERSION",
+                {
+                    timeout: this.options.authTimeoutMs,
                 }
-                return;
-            }
+            );
 
-            // Register qr events
-            let qrRetries = 0;
+            // Initialize tracking for last progress percentage
+            this._lastLoadingPercent = -1;
+
             await exposeFunctionIfAbsent(
                 this.pupPage,
-                "onQRChangedEvent",
-                async (qr) => {
-                    /**
-                     * Emitted when a QR code is received
-                     * @event Client#qr
-                     * @param {string} qr QR Code
-                     */
-                    this.emit(Events.QR_RECEIVED, qr);
-                    if (this.options.qrMaxRetries > 0) {
-                        qrRetries++;
-                        if (qrRetries > this.options.qrMaxRetries) {
-                            this.emit(
-                                Events.DISCONNECTED,
-                                "Max qrcode retries reached"
-                            );
-                            await this.destroy();
-                        }
+                "onOfflineProgressUpdateEvent",
+                async (pct) => {
+                    // Only emit if percentage has changed
+                    if (pct !== this._lastLoadingPercent) {
+                        this._lastLoadingPercent = pct;
+                        this.emit(Events.LOADING_SCREEN, pct);
                     }
                 }
             );
 
-            await this.pupPage.evaluate(async () => {
-                const registrationInfo =
-                    await window.AuthStore.RegistrationUtils.waSignalStore.getRegistrationInfo();
-                const noiseKeyPair =
-                    await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
-                const staticKeyB64 = window.AuthStore.Base64Tools.encodeB64(
-                    noiseKeyPair.staticKeyPair.pubKey
-                );
-                const identityKeyB64 = window.AuthStore.Base64Tools.encodeB64(
-                    registrationInfo.identityKeyPair.pubKey
-                );
-                const advSecretKey =
-                    await window.AuthStore.RegistrationUtils.getADVSecretKey();
-                const platform =
-                    window.AuthStore.RegistrationUtils.DEVICE_PLATFORM;
-                const getQR = (ref) =>
-                    ref +
-                    "," +
-                    staticKeyB64 +
-                    "," +
-                    identityKeyB64 +
-                    "," +
-                    advSecretKey +
-                    "," +
-                    platform;
+            // Expose clientId to the browser context for in-page script logging
+            await this.pupPage.evaluate((id) => {
+                window.wwebjs_client_id = id;
+            }, this.clientId);
 
-                window.onQRChangedEvent(getQR(window.AuthStore.Conn.ref)); // initial qr
-                window.AuthStore.Conn.on("change:ref", (_, ref) => {
-                    window.onQRChangedEvent(getQR(ref));
-                }); // future QR changes
-            });
-        }
-
-        await exposeFunctionIfAbsent(
-            this.pupPage,
-            "onAuthAppStateChangedEvent",
-            async (state) => {
-                if (state == "UNPAIRED_IDLE") {
-                    // refresh qr code
-                    window.Store.Cmd.refreshQR();
-                }
-            }
-        );
-
-        await exposeFunctionIfAbsent(
-            this.pupPage,
-            "onAppStateHasSyncedEvent",
-            async () => {
-                const authEventPayload =
-                    await this.authStrategy.getAuthEventPayload();
-                /**
-                 * Emitted when authentication is successful
-                 * @event Client#authenticated
-                 */
-                this.emit(Events.AUTHENTICATED, authEventPayload);
-
-                const injected = await this.pupPage.evaluate(async () => {
-                    return (
-                        typeof window.Store !== "undefined" &&
-                        typeof window.WWebJS !== "undefined"
-                    );
-                });
-
-                if (!injected) {
-                    if (
-                        this.options.webVersionCache.type === "local" &&
-                        this.currentIndexHtml
-                    ) {
-                        const { type: webCacheType, ...webCacheOptions } =
-                            this.options.webVersionCache;
-                        const webCache = WebCacheFactory.createWebCache(
-                            webCacheType,
-                            webCacheOptions
-                        );
-
-                        await webCache.persist(this.currentIndexHtml, version);
-                    }
-
-                    if (isCometOrAbove) {
-                        await this.pupPage.evaluate(ExposeStore);
-                    } else {
-                        // make sure all modules are ready before injection
-                        // 2 second delay after authentication makes sense and does not need to be made dyanmic or removed
-                        await new Promise((r) => setTimeout(r, 2000));
-                        await this.pupPage.evaluate(ExposeLegacyStore);
-                    }
-
-                    // Check window.Store Injection
-                    await this.pupPage.waitForFunction(
-                        "window.Store != undefined"
-                    );
-
-                    /**
-                     * Current connection information
-                     * @type {ClientInfo}
-                     */
-                    this.info = new ClientInfo(
-                        this,
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                "onAuthAppStateChangedEvent",
+                async (state) => {
+                    if (state === "UNPAIRED_IDLE") {
+                        // refresh QR if phone unpaired itself
                         await this.pupPage.evaluate(() => {
-                            return {
-                                ...window.Store.Conn.serialize(),
-                                wid: window.Store.User.getMeUser(),
-                            };
-                        })
+                            if (
+                                window.Store &&
+                                window.Store.Cmd &&
+                                typeof window.Store.Cmd.refreshQR === "function"
+                            ) {
+                                window.Store.Cmd.refreshQR();
+                            } else {
+                                console.warn(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] Cannot refresh QR: Store.Cmd is not available`
+                                );
+                            }
+                        });
+                    }
+                }
+            );
+
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                "onAppStateHasSyncedEvent",
+                async () => {
+                    await this.pupPage.evaluate(() =>
+                        window.__wwebjs_emit("auth_synced")
+                    );
+                }
+            );
+
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                "onLogoutEvent",
+                async () => {
+                    this.emit(Events.DISCONNECTED, "LOGOUT");
+                    await this.destroy();
+                }
+            );
+
+            /* core bridge for everything else */
+            await exposeFunctionIfAbsent(
+                this.pupPage,
+                "__wwebjs_bridge",
+                async (evt, ...p) => {
+                    try {
+                        switch (evt) {
+                            case "auth_state":
+                                this.emit(Events.STATE_CHANGED, p[0]);
+                                break;
+                            case "auth_synced":
+                                this.emit(
+                                    Events.AUTHENTICATED,
+                                    await this.authStrategy.getAuthEventPayload()
+                                );
+                                if (!this._storeInjected) {
+                                    await this.pupPage.evaluate(ExposeStore);
+                                    await this.pupPage.evaluate(LoadUtils);
+                                    this.info = new ClientInfo(
+                                        this,
+                                        await this.pupPage.evaluate(() => ({
+                                            ...window.Store.Conn.serialize(),
+                                            wid: window.Store.User.getMeUser(),
+                                        }))
+                                    );
+                                    this.interface = new InterfaceController(
+                                        this
+                                    );
+                                    await this.attachEventListeners();
+                                    this._storeInjected = true;
+                                }
+                                this.emit(Events.READY);
+                                this.authStrategy.afterAuthReady();
+                                break;
+                            case "offline_progress":
+                                // Also check for duplicates here for the bridge event
+                                const progressPct = p[0];
+                                if (progressPct !== this._lastLoadingPercent) {
+                                    this._lastLoadingPercent = progressPct;
+                                    this.emit(
+                                        Events.LOADING_SCREEN,
+                                        progressPct
+                                    );
+                                }
+                                break;
+                        }
+                    } catch (err) {
+                        console.error(`[${this.clientId}] bridge`, err);
+                    }
+                }
+            );
+
+            // ──────── flush queue ─────────
+            await this.pupPage.evaluate(() => {
+                window.__wwebjs_emit = (...a) => window.__wwebjs_bridge(...a);
+                window.__wwebjs_ready = true;
+                (window.__wwebjs_q || []).forEach((args) =>
+                    window.__wwebjs_bridge(...args)
+                );
+                window.__wwebjs_q = [];
+            });
+
+            /*───────────────── Expose WA AuthStore ─────────────────*/
+            await this.pupPage.evaluate(ExposeAuthStore);
+
+            /*───────────────── Check whether we need QR login ─────────────────*/
+            const needAuth = await this.pupPage.evaluate(async () => {
+                const { AppState } = window.AuthStore;
+                let st = AppState.state;
+                if (["OPENING", "UNLAUNCHED", "PAIRING"].includes(st)) {
+                    await new Promise((res) => {
+                        const cb = (_a, s) => {
+                            if (
+                                !["OPENING", "UNLAUNCHED", "PAIRING"].includes(
+                                    s
+                                )
+                            ) {
+                                AppState.off("change:state", cb);
+                                res();
+                            }
+                        };
+                        AppState.on("change:state", cb);
+                    });
+                    st = AppState.state;
+                }
+                return st === "UNPAIRED" || st === "UNPAIRED_IDLE";
+            });
+
+            if (needAuth) {
+                const { failed, failureEventPayload, restart } =
+                    await this.authStrategy.onAuthenticationNeeded();
+                if (failed) {
+                    this.emit(
+                        Events.AUTHENTICATION_FAILURE,
+                        failureEventPayload
+                    );
+                    await this.destroy();
+                    if (restart) return this.initialize();
+                    return;
+                }
+
+                await exposeFunctionIfAbsent(
+                    this.pupPage,
+                    "onQRChangedEvent",
+                    (qr) => this.emit(Events.QR_RECEIVED, qr)
+                );
+
+                await this.pupPage.evaluate(() => {
+                    const reg = window.AuthStore.RegistrationUtils;
+                    const buildQR = async () => {
+                        const info =
+                            await reg.waSignalStore.getRegistrationInfo();
+                        const noise = await reg.waNoiseInfo.get();
+                        const sB64 = window.AuthStore.Base64Tools.encodeB64(
+                            noise.staticKeyPair.pubKey
+                        );
+                        const iB64 = window.AuthStore.Base64Tools.encodeB64(
+                            info.identityKeyPair.pubKey
+                        );
+                        const adv = await reg.getADVSecretKey();
+                        const plat = reg.DEVICE_PLATFORM;
+                        const ref = window.AuthStore.Conn.ref;
+                        return `${ref},${sB64},${iB64},${adv},${plat}`;
+                    };
+
+                    // Use a try-catch block to safely call the function
+                    const safeCallQREvent = async () => {
+                        try {
+                            const qrString = await buildQR();
+                            if (typeof window.onQRChangedEvent === "function") {
+                                window.onQRChangedEvent(qrString);
+                            } else {
+                                console.warn(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] onQRChangedEvent is not available yet`
+                                );
+                            }
+                        } catch (err) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Error generating QR:`,
+                                err
+                            );
+                        }
+                    };
+
+                    safeCallQREvent();
+
+                    window.AuthStore.Conn.on("change:ref", async () => {
+                        safeCallQREvent();
+                    });
+                });
+            }
+
+            /*───────────────── Wire WA-side emitters ─────────────────*/
+            await this.pupPage.evaluate(() => {
+                if (window.__wwebjs_authHooksInstalled) return;
+                window.__wwebjs_authHooksInstalled = true;
+
+                // Add safety check to ensure AuthStore exists before accessing it
+                if (!window.AuthStore) {
+                    console.error(
+                        `[${
+                            window.wwebjs_client_id || "default"
+                        }] AuthStore is undefined, cannot set up event hooks`
                     );
 
-                    this.interface = new InterfaceController(this);
+                    // Create a periodic check to try setting up hooks when AuthStore becomes available
+                    window.__wwebjs_authstore_check = setInterval(() => {
+                        if (window.AuthStore) {
+                            console.log(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] AuthStore is now available, setting up hooks`
+                            );
+                            clearInterval(window.__wwebjs_authstore_check);
+                            setupAuthHooks();
+                        }
+                    }, 60000); // Check every minute
 
-                    //Load util functions (serializers, helper functions)
-                    await this.pupPage.evaluate(LoadUtils);
+                    return;
+                }
 
-                    await this.attachEventListeners();
+                // Move the hook setup into a named function so we can call it later if needed
+                function setupAuthHooks() {
+                    try {
+                        const { AppState, Cmd, OfflineMessageHandler } =
+                            window.AuthStore || {};
+
+                        // Safety check for required objects
+                        if (!AppState) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] AppState is undefined, cannot set up event hooks`
+                            );
+                            return;
+                        }
+
+                        if (!Cmd) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Cmd is undefined, cannot set up event hooks`
+                            );
+                            return;
+                        }
+
+                        // Improved safeEmit with fallback mechanism
+                        const safeEmit = (fnName, ...args) => {
+                            if (typeof window[fnName] === "function") {
+                                try {
+                                    window[fnName](...args);
+                                } catch (err) {
+                                    console.error(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] Error calling ${fnName}:`,
+                                        err
+                                    );
+                                    // Attempt to restore function if it fails
+                                    window[fnName] = function (...restoreArgs) {
+                                        console.log(
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Restored ${fnName} called with:`,
+                                            restoreArgs
+                                        );
+                                    };
+                                }
+                            } else {
+                                console.warn(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] ${fnName} is not available, creating placeholder`
+                                );
+                                // Create a placeholder if missing
+                                window[fnName] = function (...restoreArgs) {
+                                    console.log(
+                                        `[${
+                                            window.wwebjs_client_id || "default"
+                                        }] New placeholder for ${fnName} called with:`,
+                                        restoreArgs
+                                    );
+                                };
+                            }
+                        };
+
+                        // Use try-catch around all event listeners
+                        try {
+                            if (AppState && typeof AppState.on === "function") {
+                                AppState.on("change:state", (_s, st) => {
+                                    try {
+                                        safeEmit(
+                                            "onAuthAppStateChangedEvent",
+                                            st
+                                        );
+                                    } catch (e) {
+                                        console.error(
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Error in AppState state change handler:`,
+                                            e
+                                        );
+                                    }
+                                });
+                            }
+                        } catch (e) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Failed to set up AppState.on('change:state') listener:`,
+                                e
+                            );
+                        }
+
+                        try {
+                            if (AppState && typeof AppState.on === "function") {
+                                AppState.on("change:hasSynced", () => {
+                                    try {
+                                        safeEmit("onAppStateHasSyncedEvent");
+                                    } catch (e) {
+                                        console.error(
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Error in AppState hasSynced change handler:`,
+                                            e
+                                        );
+                                    }
+                                });
+                            }
+                        } catch (e) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Failed to set up AppState.on('change:hasSynced') listener:`,
+                                e
+                            );
+                        }
+
+                        // Track last progress percentage in the browser context
+                        window.__wwebjs_last_progress = -1;
+
+                        try {
+                            if (
+                                Cmd &&
+                                typeof Cmd.on === "function" &&
+                                OfflineMessageHandler
+                            ) {
+                                Cmd.on("offline_progress_update", () => {
+                                    try {
+                                        const progress =
+                                            OfflineMessageHandler.getOfflineDeliveryProgress();
+
+                                        // Only emit if progress has changed
+                                        if (
+                                            progress !==
+                                            window.__wwebjs_last_progress
+                                        ) {
+                                            window.__wwebjs_last_progress =
+                                                progress;
+                                            safeEmit(
+                                                "onOfflineProgressUpdateEvent",
+                                                progress
+                                            );
+                                        }
+                                    } catch (e) {
+                                        console.error(
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Error in offline_progress_update handler:`,
+                                            e
+                                        );
+                                    }
+                                });
+                            }
+                        } catch (e) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Failed to set up Cmd.on('offline_progress_update') listener:`,
+                                e
+                            );
+                        }
+
+                        try {
+                            if (Cmd && typeof Cmd.on === "function") {
+                                Cmd.on("logout", () => {
+                                    try {
+                                        safeEmit("onLogoutEvent");
+                                    } catch (e) {
+                                        console.error(
+                                            `[${
+                                                window.wwebjs_client_id ||
+                                                "default"
+                                            }] Error in logout handler:`,
+                                            e
+                                        );
+                                    }
+                                });
+                            }
+                        } catch (e) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] Failed to set up Cmd.on('logout') listener:`,
+                                e
+                            );
+                        }
+                    } catch (outerError) {
+                        console.error(
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] Fatal error setting up auth hooks:`,
+                            outerError
+                        );
+                    }
                 }
-                /**
-                 * Emitted when the client has initialized and is ready to receive messages.
-                 * @event Client#ready
-                 */
-                this.emit(Events.READY);
-                this.authStrategy.afterAuthReady();
+
+                // Call the setup function immediately
+                setupAuthHooks();
+
+                // Also set up a periodic check to ensure hooks are still working
+                window.__wwebjs_hook_check = setInterval(() => {
+                    if (!window.AuthStore || !window.AuthStore.Cmd) {
+                        console.warn(
+                            `[${
+                                window.wwebjs_client_id || "default"
+                            }] AuthStore or Cmd is missing, trying to re-setup hooks`
+                        );
+                        setupAuthHooks();
+                    }
+                }, 300000); // Check every 5 minutes
+            });
+
+            if (this._authStoreCheckInterval) {
+                clearInterval(this._authStoreCheckInterval);
             }
-        );
-        let lastPercent = null;
-        await exposeFunctionIfAbsent(
-            this.pupPage,
-            "onOfflineProgressUpdateEvent",
-            async (percent) => {
-                if (lastPercent !== percent) {
-                    lastPercent = percent;
-                    this.emit(Events.LOADING_SCREEN, percent, "WhatsApp"); // Message is hardcoded as "WhatsApp" for now
+
+            // Also add a periodic page-level check from the Node.js side
+            this._authStoreCheckInterval = setInterval(async () => {
+                if (!this.pupPage || this.pupPage.isClosed()) {
+                    clearInterval(this._authStoreCheckInterval);
+                    return;
                 }
-            }
-        );
-        await exposeFunctionIfAbsent(
-            this.pupPage,
-            "onLogoutEvent",
-            async () => {
-                this.lastLoggedOut = true;
-                await this.pupPage
-                    .waitForNavigation({ waitUntil: "load", timeout: 5000 })
-                    .catch((_) => _);
-            }
-        );
-        await this.pupPage.evaluate(() => {
-            window.AuthStore.AppState.on("change:state", (_AppState, state) => {
-                window.onAuthAppStateChangedEvent(state);
-            });
-            window.AuthStore.AppState.on("change:hasSynced", () => {
-                window.onAppStateHasSyncedEvent();
-            });
-            window.AuthStore.Cmd.on("offline_progress_update", () => {
-                window.onOfflineProgressUpdateEvent(
-                    window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
-                );
-            });
-            window.AuthStore.Cmd.on("logout", async () => {
-                await window.onLogoutEvent();
-            });
-        });
+
+                try {
+                    const authStoreExists = await this.pupPage.evaluate(() => {
+                        return !!window.AuthStore && !!window.AuthStore.Cmd;
+                    });
+
+                    if (!authStoreExists) {
+                        console.warn(
+                            `[${this.clientId}] AuthStore missing, re-exposing...`
+                        );
+                        await this.pupPage.evaluate(ExposeAuthStore);
+
+                        // Try to reinstall hooks
+                        await this.pupPage.evaluate((id) => {
+                            window.wwebjs_client_id = id; // Ensure client_id is available for subsequent browser-side logs
+                            window.__wwebjs_authHooksInstalled = false;
+                            if (typeof setupAuthHooks === "function") {
+                                setupAuthHooks();
+                            }
+                        }, this.clientId);
+                    }
+                } catch (err) {
+                    console.error(
+                        `[${this.clientId}] Error checking AuthStore:`,
+                        err
+                    );
+                }
+            }, 600000); // Check every 10 minutes
+        } finally {
+            this.isInjecting = false;
+        }
+    }
+
+    /**************************************************************************/
+
+    async grabFirstPage(browser) {
+        const pages = await browser.pages();
+
+        const page = pages.find((page) => page.url() === WhatsWebURL);
+
+        return page || (await browser.newPage());
     }
 
     /**
@@ -403,34 +757,22 @@ class Client extends EventEmitter {
         await this.authStrategy.beforeBrowserInitialized();
 
         const puppeteerOpts = this.options.puppeteer;
-        if (puppeteerOpts && puppeteerOpts.browserWSEndpoint) {
-            browser = await puppeteer.connect(puppeteerOpts);
-
-            await Promise.all(
-                (
-                    await browser.pages()
-                ).map(async (page) => {
-                    await page.close();
-                })
-            );
-
-            page = await browser.newPage();
+        if (puppeteerOpts?.browserWSEndpoint) {
+            browser = await puppeteer.connect({
+                ...puppeteerOpts,
+                waitForInitialPage: false,
+            });
         } else {
-            const browserArgs = [...(puppeteerOpts.args || [])];
-            if (!browserArgs.find((arg) => arg.includes("--user-agent"))) {
-                browserArgs.push(`--user-agent=${this.options.userAgent}`);
-            }
-            // navigator.webdriver fix
-            browserArgs.push("--disable-blink-features=AutomationControlled");
-
             browser = await puppeteer.launch({
                 ...puppeteerOpts,
-                args: browserArgs,
+                args: puppeteerOpts.args || [],
+                waitForInitialPage: false,
             });
-            page = (await browser.pages())[0];
         }
 
-        if (this.options.proxyAuthentication !== undefined) {
+        page = await this.grabFirstPage(browser);
+
+        if (this.options.proxyAuthentication) {
             await page.authenticate(this.options.proxyAuthentication);
         }
 
@@ -439,39 +781,66 @@ class Client extends EventEmitter {
 
         this.pupBrowser = browser;
         this.pupPage = page;
+        this.cdpSession = await this.pupPage.createCDPSession();
 
         await this.authStrategy.afterBrowserInitialized();
         await this.initWebVersionCache();
 
-        // ocVersion (isOfficialClient patch)
-        // remove after 2.3000.x hard release
-        await page.evaluateOnNewDocument(() => {
-            const originalError = Error;
-            window.originalError = originalError;
-            //eslint-disable-next-line no-global-assign
-            Error = function (message) {
-                const error = new originalError(message);
-                const originalStack = error.stack;
-                if (error.stack.includes("moduleRaid"))
-                    error.stack =
-                        originalStack +
-                        "\n    at https://web.whatsapp.com/vendors~lazy_loaded_low_priority_components.05e98054dbd60f980427.js:2:44";
-                return error;
-            };
-        });
+        let isAlreadyInitialized = false;
+        const url = page.url();
+        if (url.startsWith(WhatsWebURL)) {
+            isAlreadyInitialized = await page.evaluate(
+                () =>
+                    typeof window.Store !== "undefined" &&
+                    typeof window.WWebJS !== "undefined"
+            );
+        }
 
-        await page.goto(WhatsWebURL, {
-            waitUntil: "load",
-            timeout: 0,
-            referer: "https://whatsapp.com/",
-        });
+        if (!isAlreadyInitialized) {
+            await page.goto(WhatsWebURL, {
+                waitUntil: "load",
+                timeout: 0,
+                referer: "https://whatsapp.com/",
+            });
+            await this.debouncedInject();
+        } else {
+            const infoData = await page.evaluate(() => ({
+                ...window.Store.Conn.serialize(),
+                wid: window.Store.User.getMeUser(),
+            }));
+            this.info = new ClientInfo(this, infoData);
+            this.interface = new InterfaceController(this);
 
-        await this.inject();
+            this.emit(Events.READY);
+            this.authStrategy.afterAuthReady();
+            await this.attachEventListeners();
+        }
 
-        if (this.options.downloadPath) {
-            const cdpSession = await this.pupPage.createCDPSession();
+        // Auto-disable media auto-download flags on client start
+        const disableAutoDownloadFlags = async () => {
+            try {
+                await this.setAutoDownloadAudio(false);
+                await this.setAutoDownloadDocuments(false);
+                await this.setAutoDownloadPhotos(false);
+                await this.setAutoDownloadVideos(false);
+            } catch (err) {
+                console.warn(
+                    `[${this.clientId}] [WWebJS] Failed to auto-disable auto-download flags:`,
+                    err?.message || err
+                );
+            }
+        };
+
+        // Disable auto-download flags on client start
+        if (isAlreadyInitialized) {
+            disableAutoDownloadFlags();
+        } else {
+            this.once(Events.READY, disableAutoDownloadFlags);
+        }
+
+        if (this.options.downloadPath && this.cdpSession) {
             // Specifying the path for chrome to save files
-            await cdpSession.send("Page.setDownloadBehavior", {
+            await this.cdpSession.send("Page.setDownloadBehavior", {
                 behavior: "allow",
                 downloadPath: this.options.downloadPath,
             });
@@ -483,10 +852,43 @@ class Client extends EventEmitter {
                 await this.authStrategy.logout();
                 await this.authStrategy.beforeBrowserInitialized();
                 await this.authStrategy.afterBrowserInitialized();
+                await this.destroy();
                 this.lastLoggedOut = false;
                 return;
             }
-            await this.inject();
+
+            const alreadyInjected = await this.pupPage
+                .evaluate(() => {
+                    return (
+                        typeof window.WWebJS !== "undefined" &&
+                        typeof window.Store !== "undefined"
+                    );
+                })
+                .catch(() => false);
+
+            if (
+                this.pupPage &&
+                !this.pupPage.isClosed() &&
+                !alreadyInjected &&
+                frame.url().startsWith(WhatsWebURL)
+            ) {
+                console.log(
+                    `[${this.clientId}] [DEBUG] Page loaded/navigated, attempting injection...`
+                );
+                this._storeInjected = false;
+                this._listenersAttached = false;
+                await this.debouncedInject();
+            } else if (alreadyInjected) {
+                console.log(
+                    `[${this.clientId}] [DEBUG] Page loaded/navigated, WWebJS already injected, skipping inject().`
+                );
+            } else {
+                console.log(
+                    `[${
+                        this.clientId
+                    }] [DEBUG] Page navigated, but not injecting. URL: ${frame.url()}, Closed: ${this.pupPage?.isClosed()}, Injected: ${alreadyInjected}`
+                );
+            }
         });
     }
 
@@ -519,10 +921,94 @@ class Client extends EventEmitter {
      * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
+        if (this._listenersAttached) return;
+        this._listenersAttached = true;
+
+        await this.pupPage.waitForFunction(
+            "!!window.Store && !!window.Store.Msg",
+            {
+                timeout: 0,
+            }
+        );
+
+        await this.pupPage.evaluate(() => {
+            const stores = ["Msg", "Chat", "Call", "AppState", "PollVote"];
+
+            // --- Store references to listeners to be removed ---
+            window.__wwebjs_listeners = window.__wwebjs_listeners || {};
+
+            for (const storeName of stores) {
+                const emitter = window.Store[storeName];
+                if (!emitter || typeof emitter.off !== "function") continue;
+
+                // Remove listeners stored from previous runs
+                if (window.__wwebjs_listeners[storeName]) {
+                    for (const [evt, handler] of Object.entries(
+                        window.__wwebjs_listeners[storeName]
+                    )) {
+                        try {
+                            emitter.off(evt, handler);
+                        } catch (e) {
+                            console.warn(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] WWebJS: Failed to remove listener for ${storeName}.${evt}`,
+                                e
+                            );
+                        }
+                    }
+                }
+                window.__wwebjs_listeners[storeName] = {}; // Reset for this run
+            }
+
+            // Clear potentially old exposed functions
+            Object.keys(window)
+                .filter((k) => k.startsWith("on") && k.endsWith("Event"))
+                .forEach((k) => {
+                    if (window.hasOwnProperty(k)) {
+                        try {
+                            window[k] = null;
+                            delete window[k];
+                            if (window.hasOwnProperty(k)) {
+                                console.error(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] WWebJS Cleanup: ${k} STILL EXISTS after delete attempt`
+                                );
+                            }
+                        } catch (e) {
+                            console.error(
+                                `[${
+                                    window.wwebjs_client_id || "default"
+                                }] WWebJS Cleanup: FAILED to clear ${k}:`,
+                                e.message
+                            );
+                        }
+                    }
+                });
+        });
+
+        const mark = (fn) => {
+            fn.__wwebjsPatched = true;
+            return fn;
+        };
+
+        let last_created_message_id;
+
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onAddMessageEvent",
-            (msg) => {
+            mark((msg) => {
+                if (msg.id.id === last_created_message_id) {
+                    console.error(
+                        "Received message with same id as last created message",
+                        msg
+                    );
+                    return;
+                }
+
+                last_created_message_id = msg?.id?.id;
+
                 if (msg.type === "gp2") {
                     const notification = new GroupNotification(this, msg);
                     if (
@@ -598,7 +1084,7 @@ class Client extends EventEmitter {
                  * @param {Message} message The message that was received
                  */
                 this.emit(Events.MESSAGE_RECEIVED, message);
-            }
+            })
         );
 
         let last_message;
@@ -606,7 +1092,7 @@ class Client extends EventEmitter {
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onChangeMessageTypeEvent",
-            (msg) => {
+            mark((msg) => {
                 if (msg.type === "revoked") {
                     const message = new Message(this, msg);
                     let revoked_msg;
@@ -627,13 +1113,13 @@ class Client extends EventEmitter {
                         revoked_msg
                     );
                 }
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onChangeMessageEvent",
-            (msg) => {
+            mark((msg) => {
                 if (msg.type !== "revoked") {
                     last_message = msg;
                 }
@@ -679,13 +1165,13 @@ class Client extends EventEmitter {
                         isContact
                     );
                 }
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onRemoveMessageEvent",
-            (msg) => {
+            mark((msg) => {
                 if (!msg.isNewMsg) return;
 
                 const message = new Message(this, msg);
@@ -696,13 +1182,13 @@ class Client extends EventEmitter {
                  * @param {Message} message The message that was revoked
                  */
                 this.emit(Events.MESSAGE_REVOKED_ME, message);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onMessageAckEvent",
-            (msg, ack) => {
+            mark((msg, ack) => {
                 const message = new Message(this, msg);
 
                 /**
@@ -712,26 +1198,26 @@ class Client extends EventEmitter {
                  * @param {MessageAck} ack The new ACK value
                  */
                 this.emit(Events.MESSAGE_ACK, message, ack);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onChatUnreadCountEvent",
-            async (data) => {
+            mark(async (data) => {
                 const chat = await this.getChatById(data.id);
 
                 /**
                  * Emitted when the chat unread count changes
                  */
                 this.emit(Events.UNREAD_COUNT, chat);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onMessageMediaUploadedEvent",
-            (msg) => {
+            mark((msg) => {
                 const message = new Message(this, msg);
 
                 /**
@@ -740,13 +1226,13 @@ class Client extends EventEmitter {
                  * @param {Message} message The message with media that was uploaded
                  */
                 this.emit(Events.MEDIA_UPLOADED, message);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onAppStateChangedEvent",
-            async (state) => {
+            mark(async (state) => {
                 /**
                  * Emitted when the connection state changes
                  * @event Client#change_state
@@ -783,13 +1269,13 @@ class Client extends EventEmitter {
                     this.emit(Events.DISCONNECTED, state);
                     this.destroy();
                 }
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onBatteryStateChangedEvent",
-            (state) => {
+            mark((state) => {
                 const { battery, plugged } = state;
 
                 if (battery === undefined) return;
@@ -803,7 +1289,7 @@ class Client extends EventEmitter {
                  * @deprecated
                  */
                 this.emit(Events.BATTERY_CHANGED, { battery, plugged });
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(this.pupPage, "onIncomingCall", (call) => {
@@ -827,7 +1313,7 @@ class Client extends EventEmitter {
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onReaction",
-            (reactions) => {
+            mark((reactions) => {
                 for (const reaction of reactions) {
                     /**
                      * Emitted when a reaction is sent, received, updated or removed
@@ -849,13 +1335,13 @@ class Client extends EventEmitter {
                         new Reaction(this, reaction)
                     );
                 }
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onRemoveChatEvent",
-            async (chat) => {
+            mark(async (chat) => {
                 const _chat = await this.getChatById(chat.id);
 
                 /**
@@ -864,13 +1350,13 @@ class Client extends EventEmitter {
                  * @param {Chat} chat
                  */
                 this.emit(Events.CHAT_REMOVED, _chat);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onArchiveChatEvent",
-            async (chat, currState, prevState) => {
+            mark(async (chat, currState, prevState) => {
                 const _chat = await this.getChatById(chat.id);
 
                 /**
@@ -881,13 +1367,13 @@ class Client extends EventEmitter {
                  * @param {boolean} prevState
                  */
                 this.emit(Events.CHAT_ARCHIVED, _chat, currState, prevState);
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onEditMessageEvent",
-            (msg, newBody, prevBody) => {
+            mark((msg, newBody, prevBody) => {
                 if (msg.type === "revoked") {
                     return;
                 }
@@ -904,26 +1390,26 @@ class Client extends EventEmitter {
                     newBody,
                     prevBody
                 );
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onAddMessageCiphertextEvent",
-            (msg) => {
+            mark((msg) => {
                 /**
                  * Emitted when messages are edited
                  * @event Client#message_ciphertext
                  * @param {Message} message
                  */
                 this.emit(Events.MESSAGE_CIPHERTEXT, new Message(this, msg));
-            }
+            })
         );
 
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onPollVoteEvent",
-            (vote) => {
+            mark((vote) => {
                 const _vote = new PollVote(this, vote);
                 /**
                  * Emitted when some poll option is selected or deselected,
@@ -931,37 +1417,46 @@ class Client extends EventEmitter {
                  * @event Client#vote_update
                  */
                 this.emit(Events.VOTE_UPDATE, _vote);
-            }
+            })
         );
 
         await this.pupPage.evaluate(() => {
-            window.Store.Msg.on("change", (msg) => {
+            const attachListener = (storeName, eventName, handler) => {
+                window.__wwebjs_listeners = window.__wwebjs_listeners || {};
+                window.__wwebjs_listeners[storeName] =
+                    window.__wwebjs_listeners[storeName] || {};
+                window.__wwebjs_listeners[storeName][eventName] = handler; // Store reference
+                window.Store[storeName].on(eventName, handler);
+            };
+
+            attachListener("Msg", "change", (msg) => {
                 window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg));
             });
-            window.Store.Msg.on("change:type", (msg) => {
+            attachListener("Msg", "change:type", (msg) => {
                 window.onChangeMessageTypeEvent(
                     window.WWebJS.getMessageModel(msg)
                 );
             });
-            window.Store.Msg.on("change:ack", (msg, ack) => {
+            attachListener("Msg", "change:ack", (msg, ack) => {
                 window.onMessageAckEvent(
                     window.WWebJS.getMessageModel(msg),
                     ack
                 );
             });
-            window.Store.Msg.on("change:isUnsentMedia", (msg, unsent) => {
+            attachListener("Msg", "change:isUnsentMedia", (msg, unsent) => {
                 if (msg.id.fromMe && !unsent)
                     window.onMessageMediaUploadedEvent(
                         window.WWebJS.getMessageModel(msg)
                     );
             });
-            window.Store.Msg.on("remove", (msg) => {
+            attachListener("Msg", "remove", (msg) => {
                 if (msg.isNewMsg)
                     window.onRemoveMessageEvent(
                         window.WWebJS.getMessageModel(msg)
                     );
             });
-            window.Store.Msg.on(
+            attachListener(
+                "Msg",
                 "change:body change:caption",
                 (msg, newBody, prevBody) => {
                     window.onEditMessageEvent(
@@ -971,21 +1466,19 @@ class Client extends EventEmitter {
                     );
                 }
             );
-            window.Store.AppState.on("change:state", (_AppState, state) => {
+            attachListener("AppState", "change:state", (_AppState, state) => {
                 window.onAppStateChangedEvent(state);
             });
-            window.Store.Conn.on("change:battery", (state) => {
-                window.onBatteryStateChangedEvent(state);
-            });
-            window.Store.Call.on("add", (call) => {
+            attachListener("Call", "add", (call) => {
                 window.onIncomingCall(call);
             });
-            window.Store.Chat.on("remove", async (chat) => {
+            attachListener("Chat", "remove", async (chat) => {
                 window.onRemoveChatEvent(
                     await window.WWebJS.getChatModel(chat)
                 );
             });
-            window.Store.Chat.on(
+            attachListener(
+                "Chat",
                 "change:archive",
                 async (chat, currState, prevState) => {
                     window.onArchiveChatEvent(
@@ -995,7 +1488,7 @@ class Client extends EventEmitter {
                     );
                 }
             );
-            window.Store.Msg.on("add", (msg) => {
+            attachListener("Msg", "add", (msg) => {
                 if (msg.isNewMsg) {
                     if (msg.type === "ciphertext") {
                         // defer message event until ciphertext is resolved (type changed)
@@ -1014,25 +1507,19 @@ class Client extends EventEmitter {
                     }
                 }
             });
-            window.Store.Chat.on("change:unreadCount", (chat) => {
+            attachListener("Chat", "change:unreadCount", (chat) => {
                 window.onChatUnreadCountEvent(chat);
             });
-            window.Store.PollVote.on("add", async (vote) => {
+            attachListener("PollVote", "add", async (vote) => {
                 const pollVoteModel = await window.WWebJS.getPollVoteModel(
                     vote
                 );
                 pollVoteModel && window.onPollVoteEvent(pollVoteModel);
             });
 
-            if (
-                window.compareWwebVersions(
-                    window.Debug.VERSION,
-                    ">=",
-                    "2.3000.1014111620"
-                )
-            ) {
-                const module = window.Store.AddonReactionTable;
-                const ogMethod = module.bulkUpsert;
+            const module = window.Store.AddonReactionTable;
+            const ogMethod = module.bulkUpsert;
+            if (!ogMethod.__wwebjsPatched) {
                 module.bulkUpsert = ((...args) => {
                     window.onReaction(
                         args[0].map((reaction) => {
@@ -1051,34 +1538,9 @@ class Client extends EventEmitter {
                             };
                         })
                     );
-
-                    return ogMethod(...args);
+                    return ogMethod.apply(module, args);
                 }).bind(module);
-            } else {
-                const module = window.Store.createOrUpdateReactionsModule;
-                const ogMethod = module.createOrUpdateReactions;
-                module.createOrUpdateReactions = ((...args) => {
-                    window.onReaction(
-                        args[0].map((reaction) => {
-                            const msgKey = window.Store.MsgKey.fromString(
-                                reaction.msgKey
-                            );
-                            const parentMsgKey = window.Store.MsgKey.fromString(
-                                reaction.parentMsgKey
-                            );
-                            const timestamp = reaction.timestamp / 1000;
-
-                            return {
-                                ...reaction,
-                                msgKey,
-                                parentMsgKey,
-                                timestamp,
-                            };
-                        })
-                    );
-
-                    return ogMethod(...args);
-                }).bind(module);
+                module.bulkUpsert.__wwebjsPatched = true;
             }
         });
     }
@@ -1135,22 +1597,21 @@ class Client extends EventEmitter {
      * Logs out the client, closing the current session
      */
     async logout() {
-        try {
-            await this.pupPage?.evaluate(() => {
+        await this.pupPage
+            ?.evaluate(() => {
                 if (
                     window.Store?.AppState &&
                     typeof window.Store.AppState.logout === "function"
                 ) {
                     return window.Store.AppState.logout();
                 }
-            });
-        } catch (e) {
-            console.error(
-                `[${this.clientId}] Received an error when tried to logout from the session`,
-                e.message
+            })
+            .catch((e) =>
+                console.error(
+                    `[${this.clientId}] Received an error when tried to logout from the session`,
+                    e
+                )
             );
-            //
-        }
         await this.pupBrowser?.close();
 
         let maxDelay = 0;
@@ -2442,19 +2903,9 @@ class Client extends EventEmitter {
     async reinitializeCryptoStore() {
         if (!this.pupPage || this.pupPage.isClosed()) return;
 
-        try {
-            const injected = await this.pupPage.evaluate(async () => {
-                return (
-                    typeof window.Store !== "undefined" &&
-                    typeof window.WWebJS !== "undefined"
-                );
-            });
-
-            if (!injected)
-                await new Promise((resolve) => setTimeout(resolve, 5_000));
-        } catch (err) {
-            console.error("Error during reinitializeCryptoStore", err.message);
-        }
+        await this.pupPage.waitForFunction("!!window.Store", {
+            timeout: 180_000,
+        });
 
         await this.pupPage?.evaluate(async (CIPHERTEXT_TYPE_VALUE) => {
             try {
@@ -2467,7 +2918,6 @@ class Client extends EventEmitter {
                 const originalAddHandler = window.Store.Msg.on;
                 window.Store.Msg.on = function (event, handler) {
                     if (event === "add") {
-                        console.debug("Calling original add message handler");
                         return originalAddHandler.call(
                             this,
                             event,
