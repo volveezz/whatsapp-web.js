@@ -468,6 +468,17 @@ class Client extends EventEmitter {
 
         await this.inject();
 
+        if (this.options.downloadPath) {
+            const cdpSession = await this.pupPage.createCDPSession();
+            // Specifying the path for chrome to save files
+            await cdpSession.send("Page.setDownloadBehavior", {
+                behavior: "allow",
+                downloadPath: this.options.downloadPath,
+            });
+
+            cdpSession.detach();
+        }
+
         this.pupPage.on("framenavigated", async (frame) => {
             if (frame.url().includes("post_logout=1") || this.lastLoggedOut) {
                 this.emit(Events.DISCONNECTED, "LOGOUT");
@@ -2431,10 +2442,19 @@ class Client extends EventEmitter {
     async reinitializeCryptoStore() {
         if (!this.pupPage || this.pupPage.isClosed()) return;
 
-        await this.pupPage.waitForFunction("!!window.Store", {
-            timeout: 180_000,
-        });
+        try {
+            const injected = await this.pupPage.evaluate(async () => {
+                return (
+                    typeof window.Store !== "undefined" &&
+                    typeof window.WWebJS !== "undefined"
+                );
+            });
 
+            if (!injected)
+                await new Promise((resolve) => setTimeout(resolve, 5_000));
+        } catch (err) {
+            console.error(`Error during reinitializeCryptoStore`, err);
+        }
         await this.pupPage?.evaluate(async (CIPHERTEXT_TYPE_VALUE) => {
             try {
                 if (window.Store?.CryptoLib) {
@@ -2446,6 +2466,7 @@ class Client extends EventEmitter {
                 const originalAddHandler = window.Store.Msg.on;
                 window.Store.Msg.on = function (event, handler) {
                     if (event === "add") {
+                        console.debug("Calling original add message handler");
                         return originalAddHandler.call(
                             this,
                             event,
