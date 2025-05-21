@@ -1135,21 +1135,22 @@ class Client extends EventEmitter {
      * Logs out the client, closing the current session
      */
     async logout() {
-        await this.pupPage
-            ?.evaluate(() => {
+        try {
+            await this.pupPage?.evaluate(() => {
                 if (
                     window.Store?.AppState &&
                     typeof window.Store.AppState.logout === "function"
                 ) {
                     return window.Store.AppState.logout();
                 }
-            })
-            .catch((e) =>
-                console.error(
-                    `[${this.clientId}] Received an error when tried to logout from the session`,
-                    e
-                )
+            });
+        } catch (e) {
+            console.error(
+                `[${this.clientId}] Received an error when tried to logout from the session`,
+                e.message
             );
+            //
+        }
         await this.pupBrowser?.close();
 
         let maxDelay = 0;
@@ -2452,8 +2453,9 @@ class Client extends EventEmitter {
             if (!injected)
                 await new Promise((resolve) => setTimeout(resolve, 5_000));
         } catch (err) {
-            console.error(`Error during reinitializeCryptoStore`, err);
+            console.error("Error during reinitializeCryptoStore", err.message);
         }
+
         await this.pupPage?.evaluate(async (CIPHERTEXT_TYPE_VALUE) => {
             try {
                 if (window.Store?.CryptoLib) {
