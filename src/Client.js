@@ -37,7 +37,6 @@ const {
 const NoAuth = require("./authStrategies/NoAuth");
 const { exposeFunctionIfAbsent } = require("./util/Puppeteer");
 const treeKill = require("tree-kill");
-const { debounce } = require("./util/debounce");
 
 /**
  * SendMessageError represents an error that occurred during message sending
@@ -108,8 +107,6 @@ class Client extends EventEmitter {
         this.clientId = this.authStrategy.clientId || "default";
 
         this.authStrategy.setup(this);
-
-        this.debouncedInject = debounce(this.inject.bind(this), 500);
 
         /**
          * @type {puppeteer.Browser}
@@ -802,7 +799,7 @@ class Client extends EventEmitter {
                 timeout: 0,
                 referer: "https://whatsapp.com/",
             });
-            await this.debouncedInject();
+            await this.inject();
         } else {
             const infoData = await page.evaluate(() => ({
                 ...window.Store.Conn.serialize(),
@@ -877,7 +874,7 @@ class Client extends EventEmitter {
                 );
                 this._storeInjected = false;
                 this._listenersAttached = false;
-                await this.debouncedInject();
+                await this.inject();
             } else if (alreadyInjected) {
                 console.log(
                     `[${this.clientId}] [DEBUG] Page loaded/navigated, WWebJS already injected, skipping inject().`
