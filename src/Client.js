@@ -475,8 +475,6 @@ class Client extends EventEmitter {
                 behavior: "allow",
                 downloadPath: this.options.downloadPath,
             });
-
-            cdpSession.detach();
         }
 
         this.pupPage.on("framenavigated", async (frame) => {
@@ -486,6 +484,7 @@ class Client extends EventEmitter {
                 await this.authStrategy.beforeBrowserInitialized();
                 await this.authStrategy.afterBrowserInitialized();
                 this.lastLoggedOut = false;
+                return;
             }
             await this.inject();
         });
