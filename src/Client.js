@@ -1809,7 +1809,9 @@ class Client extends EventEmitter {
      */
     async prepareMedia(filePath, uniqueId, options = {}) {
         const sanitizedUniqueId = uniqueId.replace(/[^a-zA-Z0-9_]/g, "_");
-        const inputId = `wwebjs-upload-${sanitizedUniqueId}`;
+        const inputId = `wwebjs-upload-${sanitizedUniqueId}_${Math.random()
+            .toString(36)
+            .substring(2, 15)}`.slice(0, 255);
 
         // Create input element in browser
         await this.pupPage.evaluate((id) => {
@@ -1820,7 +1822,7 @@ class Client extends EventEmitter {
             document.body.appendChild(input);
         }, inputId);
 
-        await this.pupPage.waitForSelector(`#${inputId}`, { timeout: 30000 }); // 30s
+        await this.pupPage.waitForSelector(`#${inputId}`, { timeout: 5000 }); // 5s
         const input = await this.pupPage.$(`#${inputId}`);
         if (!input) throw new Error("Input element not found");
 
