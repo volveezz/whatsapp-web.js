@@ -736,17 +736,11 @@ class Message extends Base {
                     link.href = url;
                     link.download = filename;
 
-                    console.log(
-                        `${logPrefix} Appending link to body and clicking.`
-                    );
                     document.body.appendChild(link);
                     link.click();
-                    console.log(`${logPrefix} Link clicked.`);
 
                     document.body.removeChild(link);
-                    console.log(
-                        `${logPrefix} Link removed. Setting timeout to revoke Object URL.`
-                    );
+
                     setTimeout(() => {
                         URL.revokeObjectURL(url);
                         console.log(

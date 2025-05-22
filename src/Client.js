@@ -1820,7 +1820,18 @@ class Client extends EventEmitter {
             document.body.appendChild(input);
         }, inputId);
 
-        const input = await this.pupPage.$(`#${inputId}`);
+        let input = await this.pupPage.$(`#${inputId}`);
+
+        if (!input) {
+            let maxDelay = 0;
+            while (!input && maxDelay < 30 /** 30 seconds */) {
+                await new Promise((resolve) => setTimeout(resolve, 100));
+                input = await this.pupPage.$(`#${inputId}`);
+                maxDelay++;
+            }
+            if (!input) throw new Error("Media upload timed out after 30s");
+        }
+
         await input.uploadFile(filePath);
 
         // Race browser logic against the abort signal outside
