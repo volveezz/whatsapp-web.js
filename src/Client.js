@@ -1820,17 +1820,9 @@ class Client extends EventEmitter {
             document.body.appendChild(input);
         }, inputId);
 
-        let input = await this.pupPage.$(`#${inputId}`);
-
-        if (!input) {
-            let maxDelay = 0;
-            while (!input && maxDelay < 30 /** 30 seconds */) {
-                await new Promise((resolve) => setTimeout(resolve, 100));
-                input = await this.pupPage.$(`#${inputId}`);
-                maxDelay++;
-            }
-            if (!input) throw new Error("Media upload timed out after 30s");
-        }
+        await this.pupPage.waitForSelector(`#${inputId}`, { timeout: 30000 }); // 30s
+        const input = await this.pupPage.$(`#${inputId}`);
+        if (!input) throw new Error("Input element not found");
 
         await input.uploadFile(filePath);
 
