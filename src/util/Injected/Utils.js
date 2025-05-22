@@ -1126,14 +1126,12 @@ exports.LoadUtils = () => {
      */
     window.WWebJS.downloadLinkPreviewThumbnail = async (thumbnailUrl) => {
         try {
-            // Определяем формат файла из URL или defaulting to jpg
             const urlParts = thumbnailUrl.split(".");
             const fileExtension =
                 urlParts.length > 1
                     ? urlParts[urlParts.length - 1].split("?")[0].toLowerCase()
                     : "jpg";
 
-            // Определяем MIME-тип на основе расширения
             let mimetype;
             switch (fileExtension) {
                 case "png":
@@ -1149,7 +1147,6 @@ exports.LoadUtils = () => {
                     mimetype = "image/jpeg";
             }
 
-            // Загружаем изображение
             const response = await fetch(thumbnailUrl);
             if (!response.ok) {
                 return null;
@@ -1160,7 +1157,6 @@ exports.LoadUtils = () => {
                 return null;
             }
 
-            // Читаем изображение как base64
             const base64Data = await new Promise((resolve) => {
                 const reader = new FileReader();
                 reader.onloadend = () => {
@@ -1175,7 +1171,6 @@ exports.LoadUtils = () => {
                 return null;
             }
 
-            // Используем имя файла из URL или генерируем новое
             const filename = `thumbnail_${Date.now()}.${fileExtension}`;
 
             return {

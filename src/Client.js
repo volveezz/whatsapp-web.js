@@ -174,27 +174,6 @@ class Client extends EventEmitter {
                         }
                     });
 
-                    // Add a recovery mechanism that periodically checks and restores these functions
-                    window.__wwebjs_check_functions = setInterval(() => {
-                        persistentFunctions.forEach((fn) => {
-                            if (typeof window[fn] !== "function") {
-                                console.warn(
-                                    `[${
-                                        window.wwebjs_client_id || "default"
-                                    }] Function ${fn} was lost, restoring placeholder`
-                                );
-                                window[fn] = function (...args) {
-                                    console.log(
-                                        `[${
-                                            window.wwebjs_client_id || "default"
-                                        }] Restored placeholder for ${fn} called with:`,
-                                        args
-                                    );
-                                };
-                            }
-                        });
-                    }, 300000); // Check every 5 minutes
-
                     window.__wwebjs_ready = false;
                     window.__wwebjs_q = [];
                     window.__wwebjs_bridge = (...args) => {
@@ -442,90 +421,23 @@ class Client extends EventEmitter {
                 if (window.__wwebjs_authHooksInstalled) return;
                 window.__wwebjs_authHooksInstalled = true;
 
-                // Add safety check to ensure AuthStore exists before accessing it
-                if (!window.AuthStore) {
-                    console.error(
-                        `[${
-                            window.wwebjs_client_id || "default"
-                        }] AuthStore is undefined, cannot set up event hooks`
-                    );
-
-                    // Create a periodic check to try setting up hooks when AuthStore becomes available
-                    window.__wwebjs_authstore_check = setInterval(() => {
-                        if (window.AuthStore) {
-                            console.log(
-                                `[${
-                                    window.wwebjs_client_id || "default"
-                                }] AuthStore is now available, setting up hooks`
-                            );
-                            clearInterval(window.__wwebjs_authstore_check);
-                            setupAuthHooks();
-                        }
-                    }, 60000); // Check every minute
-
-                    return;
-                }
-
                 // Move the hook setup into a named function so we can call it later if needed
                 function setupAuthHooks() {
                     try {
                         const { AppState, Cmd, OfflineMessageHandler } =
                             window.AuthStore || {};
 
-                        // Safety check for required objects
-                        if (!AppState) {
-                            console.error(
-                                `[${
-                                    window.wwebjs_client_id || "default"
-                                }] AppState is undefined, cannot set up event hooks`
-                            );
-                            return;
-                        }
-
-                        if (!Cmd) {
-                            console.error(
-                                `[${
-                                    window.wwebjs_client_id || "default"
-                                }] Cmd is undefined, cannot set up event hooks`
-                            );
-                            return;
-                        }
-
-                        // Improved safeEmit with fallback mechanism
                         const safeEmit = (fnName, ...args) => {
                             if (typeof window[fnName] === "function") {
-                                try {
-                                    window[fnName](...args);
-                                } catch (err) {
-                                    console.error(
-                                        `[${
-                                            window.wwebjs_client_id || "default"
-                                        }] Error calling ${fnName}:`,
-                                        err
-                                    );
-                                    // Attempt to restore function if it fails
-                                    window[fnName] = function (...restoreArgs) {
-                                        console.log(
-                                            `[${
-                                                window.wwebjs_client_id ||
-                                                "default"
-                                            }] Restored ${fnName} called with:`,
-                                            restoreArgs
-                                        );
-                                    };
-                                }
+                                window[fnName](...args);
                             } else {
                                 console.warn(
-                                    `[${
-                                        window.wwebjs_client_id || "default"
-                                    }] ${fnName} is not available, creating placeholder`
+                                    `${fnName} is not available, creating placeholder`
                                 );
                                 // Create a placeholder if missing
                                 window[fnName] = function (...restoreArgs) {
                                     console.log(
-                                        `[${
-                                            window.wwebjs_client_id || "default"
-                                        }] New placeholder for ${fnName} called with:`,
+                                        ` New placeholder for ${fnName} called with:`,
                                         restoreArgs
                                     );
                                 };
@@ -915,7 +827,6 @@ class Client extends EventEmitter {
     /**
      * Attach event listeners to WA Web
      * Private function
-     * @property {boolean} reinject is this a reinject?
      */
     async attachEventListeners() {
         if (this._listenersAttached) return;
@@ -958,7 +869,7 @@ class Client extends EventEmitter {
                 window.__wwebjs_listeners[storeName] = {}; // Reset for this run
             }
 
-            // Clear potentially old exposed functions
+            /*
             Object.keys(window)
                 .filter((k) => k.startsWith("on") && k.endsWith("Event"))
                 .forEach((k) => {
@@ -983,6 +894,7 @@ class Client extends EventEmitter {
                         }
                     }
                 });
+            */
         });
 
         const mark = (fn) => {
@@ -2905,9 +2817,12 @@ class Client extends EventEmitter {
     async reinitializeCryptoStore() {
         if (!this.pupPage || this.pupPage.isClosed()) return;
 
-        await this.pupPage.waitForFunction("!!window.Store", {
-            timeout: 180_000,
-        });
+        await this.pupPage.waitForFunction(
+            "!!window.Store && !!window.Store.Msg",
+            {
+                timeout: 0,
+            }
+        );
 
         await this.pupPage?.evaluate(async (CIPHERTEXT_TYPE_VALUE) => {
             try {
@@ -2944,12 +2859,7 @@ class Client extends EventEmitter {
                                             );
                                         } catch (err) {
                                             console.error(
-                                                `[${
-                                                    window.wwebjs_client_id ||
-                                                    "default"
-                                                }] Failed to decrypt message during reinitializeCryptoStore:`,
-                                                err.message,
-                                                err.stack
+                                                `Failed to decrypt message during crypto store reinitialization ${err.message}`
                                             );
                                         }
                                     } else {
@@ -2962,16 +2872,11 @@ class Client extends EventEmitter {
                     return originalAddHandler.call(this, event, handler);
                 };
                 console.log(
-                    `[${
-                        window.wwebjs_client_id || "default"
-                    }] Msg store patched successfully in reinitializeCryptoStore.`
+                    `Message handler patched successfully in crypto store reinitialization`
                 );
             } catch (err) {
                 console.error(
-                    `[${
-                        window.wwebjs_client_id || "default"
-                    }] Error during reinitializeCryptoStore: ${err.message}`,
-                    err.stack
+                    `Received an error while tried to reinitialize crypto store, error: ${err.message}`
                 );
             }
         }, MessageTypes.CIPHERTEXT);

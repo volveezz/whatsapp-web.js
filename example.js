@@ -549,28 +549,6 @@ client.on("message_create", async (msg) => {
             console.log(result); // True if the operation completed successfully, false otherwise
         }
     }
-
-    // Пример получения изображения превью ссылки в сообщении
-    const linkPreview = msg.getLinkPreview();
-
-    if (linkPreview) {
-        console.log("Сообщение содержит превью ссылки:");
-        console.log(`Тип превью: ${linkPreview.type}`);
-        console.log(`Источник: ${linkPreview.source}`);
-
-        // Получаем URL миниатюры, если он доступен
-        if (linkPreview.thumbnailUrl) {
-            console.log(`URL миниатюры: ${linkPreview.thumbnailUrl}`);
-            // Здесь можно сохранить или обработать изображение
-        }
-
-        // Дополнительная метаинформация
-        if (linkPreview.title) console.log(`Заголовок: ${linkPreview.title}`);
-        if (linkPreview.description)
-            console.log(`Описание: ${linkPreview.description}`);
-        if (linkPreview.canonicalUrl)
-            console.log(`Канонический URL: ${linkPreview.canonicalUrl}`);
-    }
 });
 
 client.on("message_ciphertext", (msg) => {
