@@ -530,7 +530,7 @@ class Message extends Base {
                         ?.messages?.[0];
 
                 if (!msg?.mediaData?.mediaStage) {
-                    console.log("[WAWEBJS] No media data found");
+                    console.log("No media data found");
                     status.ok = false;
                     return { status, logs };
                 }
@@ -564,7 +564,7 @@ class Message extends Base {
                     msg.mediaData.mediaStage === "FETCHING"
                 ) {
                     console.log(
-                        `[WAWEBJS] Media stage not ready: ${msg.mediaData.mediaStage}`
+                        `Media stage not ready: ${msg.mediaData.mediaStage}`
                     );
                     status.ok = false;
                     return { status, logs };
@@ -594,7 +594,7 @@ class Message extends Base {
                 };
             } catch (e) {
                 console.log(
-                    "[WAWEBJS] Exception during media download:",
+                    "Exception during media download:",
                     e.message || e.toString()
                 );
                 status.ok = false;
@@ -617,36 +617,31 @@ class Message extends Base {
 
     /**
      * Downloads and saves the attached media to disk
+     * @param {boolean} [retry]
      * @returns {Promise<import('../../index').DownloadedMediaResult | undefined>} - Full result object or undefined on failure
      */
-    async downloadAndSaveMedia() {
+    async downloadAndSaveMedia(retry = false) {
         if (!this.hasMedia) {
             console.error(
                 `[${
                     this.client.clientId || "default"
-                }] [DownloadMedia] Tried to download media from message without it`
+                }] Tried to download media from message without it`
             );
             return;
         }
 
         const result = await this.client.pupPage.evaluate(
             async (msgId, downloadPath) => {
-                const _clientId = window.wwebjs_client_id || "default";
-                const logPrefix = `[${_clientId}] [WAWEBJS] [DownloadAndSaveMedia]:`;
-                console.log(`${logPrefix} Starting for msgId: ${msgId}`);
+                const logPrefix = `[DownloadAndSaveMedia]:`;
 
                 const status = { ok: true };
 
                 try {
-                    const msg =
-                        window.Store.Msg.get(msgId) ||
-                        (await window.Store.Msg.getMessagesById([msgId]))
-                            ?.messages?.[0];
+                    const msg = (
+                        await window.Store.Msg.getMessagesById([msgId])
+                    )?.messages?.[0];
 
                     if (!msg) {
-                        console.error(
-                            `${logPrefix} Message not found for msgId: ${msgId}`
-                        );
                         status.ok = false;
                         return { status };
                     }
@@ -678,12 +673,9 @@ class Message extends Base {
                         while (
                             msg.mediaData.mediaStage !== "RESOLVED" &&
                             !msg.mediaData.mediaStage.includes("ERROR") &&
-                            tries++ < 120 // 120 retries = 60 seconds
+                            tries++ < 3 // 3 retries = 3 seconds
                         ) {
-                            console.log(
-                                `${logPrefix} Retry ${tries}: mediaStage is ${msg.mediaData.mediaStage}. Waiting 500ms.`
-                            );
-                            await new Promise((res) => setTimeout(res, 500));
+                            await new Promise((res) => setTimeout(res, 1000));
                         }
 
                         if (msg.mediaData.mediaStage !== "RESOLVED") {
@@ -773,11 +765,15 @@ class Message extends Base {
             this.client.options.downloadPath
         );
 
+        if (result?.status?.ok === false && !retry) {
+            return await this.downloadAndSaveMedia(true);
+        }
+
         if (!result?.status?.ok) {
             console.error(
                 `[${
                     this.client.clientId || "default"
-                }] [DownloadMedia] Failed to download media after evaluate.`
+                }] Failed to download and save media`
             );
             return;
         }

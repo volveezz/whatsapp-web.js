@@ -840,29 +840,133 @@ class Client extends EventEmitter {
         );
 
         await this.pupPage.evaluate(() => {
-            const stores = ["Msg", "Chat", "Call", "AppState", "PollVote"];
+            // Define stable handlers on a global object if they don't exist
+            if (!window.WWebJSGlobalHandlers) {
+                window.WWebJSGlobalHandlers = {
+                    // Handler for 'Msg' store, 'add' event
+                    msg_add: (msg) => {
+                        if (msg.isNewMsg) {
+                            if (msg.type === "ciphertext") {
+                                msg.once("change:type", (_msg) =>
+                                    window.onAddMessageEvent(
+                                        window.WWebJS.getMessageModel(_msg)
+                                    )
+                                );
+                                window.onAddMessageCiphertextEvent(
+                                    window.WWebJS.getMessageModel(msg)
+                                );
+                            } else {
+                                window.onAddMessageEvent(
+                                    window.WWebJS.getMessageModel(msg)
+                                );
+                            }
+                        }
+                    },
+                    // Handler for 'Msg' store, 'change' event
+                    msg_change: (msg) => {
+                        window.onChangeMessageEvent(
+                            window.WWebJS.getMessageModel(msg)
+                        );
+                    },
+                    // Handler for 'Msg' store, 'change:type' event
+                    msg_change_type: (msg) => {
+                        window.onChangeMessageTypeEvent(
+                            window.WWebJS.getMessageModel(msg)
+                        );
+                    },
+                    // Handler for 'Msg' store, 'change:ack' event
+                    msg_change_ack: (msg, ack) => {
+                        window.onMessageAckEvent(
+                            window.WWebJS.getMessageModel(msg),
+                            ack
+                        );
+                    },
+                    // Handler for 'Msg' store, 'change:isUnsentMedia' event
+                    msg_change_isUnsentMedia: (msg, unsent) => {
+                        if (msg.id.fromMe && !unsent)
+                            window.onMessageMediaUploadedEvent(
+                                window.WWebJS.getMessageModel(msg)
+                            );
+                    },
+                    // Handler for 'Msg' store, 'remove' event
+                    msg_remove: (msg) => {
+                        if (msg.isNewMsg)
+                            window.onRemoveMessageEvent(
+                                window.WWebJS.getMessageModel(msg)
+                            );
+                    },
+                    // Handler for 'Msg' store, 'change:body change:caption' events
+                    msg_editField: (msg, newBody, prevBody) => {
+                        window.onEditMessageEvent(
+                            window.WWebJS.getMessageModel(msg),
+                            newBody,
+                            prevBody
+                        );
+                    },
+                    // Handler for 'AppState' store, 'change:state' event
+                    appstate_change_state: (_AppState, state) => {
+                        window.onAppStateChangedEvent(state);
+                    },
+                    // Handler for 'Call' store, 'add' event
+                    call_add: (call) => {
+                        window.onIncomingCall(call);
+                    },
+                    // Handler for 'Chat' store, 'remove' event
+                    chat_remove: async (chat) => {
+                        window.onRemoveChatEvent(
+                            await window.WWebJS.getChatModel(chat)
+                        );
+                    },
+                    // Handler for 'Chat' store, 'change:archive' event
+                    chat_change_archive: async (chat, currState, prevState) => {
+                        window.onArchiveChatEvent(
+                            await window.WWebJS.getChatModel(chat),
+                            currState,
+                            prevState
+                        );
+                    },
+                    // Handler for 'Chat' store, 'change:unreadCount' event
+                    chat_change_unreadCount: (chat) => {
+                        window.onChatUnreadCountEvent(chat);
+                    },
+                    // Handler for 'PollVote' store, 'add' event
+                    pollvote_add: async (vote) => {
+                        const pollVoteModel =
+                            await window.WWebJS.getPollVoteModel(vote);
+                        pollVoteModel && window.onPollVoteEvent(pollVoteModel);
+                    },
+                };
+            }
 
-            // --- Store references to listeners to be removed ---
+            const storesToClean = [
+                "Msg",
+                "Chat",
+                "Call",
+                "AppState",
+                "PollVote",
+            ];
             window.__wwebjs_listeners = window.__wwebjs_listeners || {};
 
-            for (const storeName of stores) {
+            for (const storeName of storesToClean) {
                 const emitter = window.Store[storeName];
                 if (!emitter || typeof emitter.off !== "function") continue;
 
-                // Remove listeners stored from previous runs
                 if (window.__wwebjs_listeners[storeName]) {
                     for (const [evt, handler] of Object.entries(
                         window.__wwebjs_listeners[storeName]
                     )) {
-                        try {
-                            emitter.off(evt, handler);
-                        } catch (e) {
-                            console.warn(
-                                `[${
-                                    window.wwebjs_client_id || "default"
-                                }] WWebJS: Failed to remove listener for ${storeName}.${evt}`,
-                                e
-                            );
+                        if (typeof handler === "function") {
+                            // Ensure it's a function before trying to call 'off'
+                            try {
+                                emitter.off(evt, handler);
+                            } catch (e) {
+                                console.warn(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] WWebJS: Failed to remove listener for ${storeName}.${evt}`,
+                                    e
+                                );
+                            }
                         }
                     }
                 }
@@ -1338,93 +1442,63 @@ class Client extends EventEmitter {
                 window.Store[storeName].on(eventName, handler);
             };
 
-            attachListener("Msg", "change", (msg) => {
-                window.onChangeMessageEvent(window.WWebJS.getMessageModel(msg));
-            });
-            attachListener("Msg", "change:type", (msg) => {
-                window.onChangeMessageTypeEvent(
-                    window.WWebJS.getMessageModel(msg)
-                );
-            });
-            attachListener("Msg", "change:ack", (msg, ack) => {
-                window.onMessageAckEvent(
-                    window.WWebJS.getMessageModel(msg),
-                    ack
-                );
-            });
-            attachListener("Msg", "change:isUnsentMedia", (msg, unsent) => {
-                if (msg.id.fromMe && !unsent)
-                    window.onMessageMediaUploadedEvent(
-                        window.WWebJS.getMessageModel(msg)
-                    );
-            });
-            attachListener("Msg", "remove", (msg) => {
-                if (msg.isNewMsg)
-                    window.onRemoveMessageEvent(
-                        window.WWebJS.getMessageModel(msg)
-                    );
-            });
+            attachListener(
+                "Msg",
+                "change",
+                window.WWebJSGlobalHandlers.msg_change
+            );
+            attachListener(
+                "Msg",
+                "change:type",
+                window.WWebJSGlobalHandlers.msg_change_type
+            );
+            attachListener(
+                "Msg",
+                "change:ack",
+                window.WWebJSGlobalHandlers.msg_change_ack
+            );
+            attachListener(
+                "Msg",
+                "change:isUnsentMedia",
+                window.WWebJSGlobalHandlers.msg_change_isUnsentMedia
+            );
+            attachListener(
+                "Msg",
+                "remove",
+                window.WWebJSGlobalHandlers.msg_remove
+            );
             attachListener(
                 "Msg",
                 "change:body change:caption",
-                (msg, newBody, prevBody) => {
-                    window.onEditMessageEvent(
-                        window.WWebJS.getMessageModel(msg),
-                        newBody,
-                        prevBody
-                    );
-                }
+                window.WWebJSGlobalHandlers.msg_editField
             );
-            attachListener("AppState", "change:state", (_AppState, state) => {
-                window.onAppStateChangedEvent(state);
-            });
-            attachListener("Call", "add", (call) => {
-                window.onIncomingCall(call);
-            });
-            attachListener("Chat", "remove", async (chat) => {
-                window.onRemoveChatEvent(
-                    await window.WWebJS.getChatModel(chat)
-                );
-            });
+            attachListener(
+                "AppState",
+                "change:state",
+                window.WWebJSGlobalHandlers.appstate_change_state
+            );
+            attachListener("Call", "add", window.WWebJSGlobalHandlers.call_add);
+            attachListener(
+                "Chat",
+                "remove",
+                window.WWebJSGlobalHandlers.chat_remove
+            );
             attachListener(
                 "Chat",
                 "change:archive",
-                async (chat, currState, prevState) => {
-                    window.onArchiveChatEvent(
-                        await window.WWebJS.getChatModel(chat),
-                        currState,
-                        prevState
-                    );
-                }
+                window.WWebJSGlobalHandlers.chat_change_archive
             );
-            attachListener("Msg", "add", (msg) => {
-                if (msg.isNewMsg) {
-                    if (msg.type === "ciphertext") {
-                        // defer message event until ciphertext is resolved (type changed)
-                        msg.once("change:type", (_msg) =>
-                            window.onAddMessageEvent(
-                                window.WWebJS.getMessageModel(_msg)
-                            )
-                        );
-                        window.onAddMessageCiphertextEvent(
-                            window.WWebJS.getMessageModel(msg)
-                        );
-                    } else {
-                        window.onAddMessageEvent(
-                            window.WWebJS.getMessageModel(msg)
-                        );
-                    }
-                }
-            });
-            attachListener("Chat", "change:unreadCount", (chat) => {
-                window.onChatUnreadCountEvent(chat);
-            });
-            attachListener("PollVote", "add", async (vote) => {
-                const pollVoteModel = await window.WWebJS.getPollVoteModel(
-                    vote
-                );
-                pollVoteModel && window.onPollVoteEvent(pollVoteModel);
-            });
+            attachListener("Msg", "add", window.WWebJSGlobalHandlers.msg_add);
+            attachListener(
+                "Chat",
+                "change:unreadCount",
+                window.WWebJSGlobalHandlers.chat_change_unreadCount
+            );
+            attachListener(
+                "PollVote",
+                "add",
+                window.WWebJSGlobalHandlers.pollvote_add
+            );
 
             const module = window.Store.AddonReactionTable;
             const ogMethod = module.bulkUpsert;
