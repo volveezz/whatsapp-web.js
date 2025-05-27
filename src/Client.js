@@ -137,6 +137,8 @@ class Client extends EventEmitter {
     async inject() {
         let hasReloaded = false;
         const client = this;
+        let lastPercent = null; // Move this to the top for broader scope
+
         const reloadHandler = async () => {
             hasReloaded = true;
         };
@@ -273,7 +275,6 @@ class Client extends EventEmitter {
                 });
             }
 
-            let lastPercent = null;
             await exposeFunctionIfAbsent(
                 this.pupPage,
                 "onOfflineProgressUpdateEvent",
@@ -454,6 +455,7 @@ class Client extends EventEmitter {
                         }
                     }
                 });
+
                 window.AuthStore.Cmd.on("logout", async () => {
                     if (typeof window.onLogoutEvent === "function") {
                         try {
@@ -740,86 +742,166 @@ class Client extends EventEmitter {
             return fn;
         };
 
+        // Add throttling for high-frequency events
+        const eventThrottler = {
+            lastEmit: {},
+            errorCount: {},
+            cleanup: () => {
+                // Reset throttling data every 5 minutes to prevent memory leaks
+                const now = Date.now();
+                const fiveMinutesAgo = now - 300000;
+
+                for (const key in eventThrottler.lastEmit) {
+                    if (eventThrottler.lastEmit[key] < fiveMinutesAgo) {
+                        delete eventThrottler.lastEmit[key];
+                    }
+                }
+
+                // Reset error counts every hour
+                for (const eventType in eventThrottler.errorCount) {
+                    if (eventThrottler.errorCount[eventType] > 0) {
+                        eventThrottler.errorCount[eventType] = Math.max(
+                            0,
+                            eventThrottler.errorCount[eventType] - 10
+                        );
+                    }
+                }
+            },
+            throttle: (eventType, fn, delay = 50) => {
+                return (...args) => {
+                    try {
+                        const now = Date.now();
+                        const key = `${eventType}_${
+                            args[0]?.id?._serialized || args[0]?.id || "default"
+                        }`;
+
+                        // Circuit breaker: if too many errors, skip this event type
+                        if (eventThrottler.errorCount[eventType] > 50) {
+                            if (now % 10000 < 100) {
+                                // Log every ~10 seconds
+                                console.warn(
+                                    `[${client.clientId}] Event ${eventType} disabled due to excessive errors`
+                                );
+                            }
+                            return;
+                        }
+
+                        if (
+                            !eventThrottler.lastEmit[key] ||
+                            now - eventThrottler.lastEmit[key] > delay
+                        ) {
+                            eventThrottler.lastEmit[key] = now;
+                            return fn(...args);
+                        }
+                    } catch (error) {
+                        eventThrottler.errorCount[eventType] =
+                            (eventThrottler.errorCount[eventType] || 0) + 1;
+                        console.error(
+                            `[${client.clientId}] Error in event ${eventType}:`,
+                            error
+                        );
+                    }
+                };
+            },
+        };
+
+        // Setup periodic cleanup
+        setInterval(eventThrottler.cleanup, 300000); // Every 5 minutes
+
         await exposeFunctionIfAbsent(
             this.pupPage,
             "onAddMessageEvent",
-            mark((msg) => {
-                if (msg.type === "gp2") {
-                    const notification = new GroupNotification(client, msg);
-                    if (
-                        ["add", "invite", "linked_group_join"].includes(
-                            msg.subtype
-                        )
-                    ) {
-                        /**
-                         * Emitted when a user joins the chat via invite link or is added by an admin.
-                         * @event Client#group_join
-                         * @param {GroupNotification} notification GroupNotification with more information about the action
-                         */
-                        client.emit(Events.GROUP_JOIN, notification);
-                    } else if (
-                        msg.subtype === "remove" ||
-                        msg.subtype === "leave"
-                    ) {
-                        /**
-                         * Emitted when a user leaves the chat or is removed by an admin.
-                         * @event Client#group_leave
-                         * @param {GroupNotification} notification GroupNotification with more information about the action
-                         */
-                        client.emit(Events.GROUP_LEAVE, notification);
-                    } else if (
-                        msg.subtype === "promote" ||
-                        msg.subtype === "demote"
-                    ) {
-                        /**
-                         * Emitted when a current user is promoted to an admin or demoted to a regular user.
-                         * @event Client#group_admin_changed
-                         * @param {GroupNotification} notification GroupNotification with more information about the action
-                         */
-                        client.emit(Events.GROUP_ADMIN_CHANGED, notification);
-                    } else if (msg.subtype === "membership_approval_request") {
-                        /**
-                         * Emitted when some user requested to join the group
-                         * that has the membership approval mode turned on
-                         * @event Client#group_membership_request
-                         * @param {GroupNotification} notification GroupNotification with more information about the action
-                         * @param {string} notification.chatId The group ID the request was made for
-                         * @param {string} notification.author The user ID that made a request
-                         * @param {number} notification.timestamp The timestamp the request was made at
-                         */
-                        client.emit(
-                            Events.GROUP_MEMBERSHIP_REQUEST,
-                            notification
-                        );
-                    } else {
-                        /**
-                         * Emitted when group settings are updated, such as subject, description or picture.
-                         * @event Client#group_update
-                         * @param {GroupNotification} notification GroupNotification with more information about the action
-                         */
-                        client.emit(Events.GROUP_UPDATE, notification);
-                    }
-                    return;
-                }
+            mark(
+                eventThrottler.throttle(
+                    "message_add",
+                    (msg) => {
+                        if (msg.type === "gp2") {
+                            const notification = new GroupNotification(
+                                client,
+                                msg
+                            );
+                            if (
+                                ["add", "invite", "linked_group_join"].includes(
+                                    msg.subtype
+                                )
+                            ) {
+                                /**
+                                 * Emitted when a user joins the chat via invite link or is added by an admin.
+                                 * @event Client#group_join
+                                 * @param {GroupNotification} notification GroupNotification with more information about the action
+                                 */
+                                client.emit(Events.GROUP_JOIN, notification);
+                            } else if (
+                                msg.subtype === "remove" ||
+                                msg.subtype === "leave"
+                            ) {
+                                /**
+                                 * Emitted when a user leaves the chat or is removed by an admin.
+                                 * @event Client#group_leave
+                                 * @param {GroupNotification} notification GroupNotification with more information about the action
+                                 */
+                                client.emit(Events.GROUP_LEAVE, notification);
+                            } else if (
+                                msg.subtype === "promote" ||
+                                msg.subtype === "demote"
+                            ) {
+                                /**
+                                 * Emitted when a current user is promoted to an admin or demoted to a regular user.
+                                 * @event Client#group_admin_changed
+                                 * @param {GroupNotification} notification GroupNotification with more information about the action
+                                 */
+                                client.emit(
+                                    Events.GROUP_ADMIN_CHANGED,
+                                    notification
+                                );
+                            } else if (
+                                msg.subtype === "membership_approval_request"
+                            ) {
+                                /**
+                                 * Emitted when some user requested to join the group
+                                 * that has the membership approval mode turned on
+                                 * @event Client#group_membership_request
+                                 * @param {GroupNotification} notification GroupNotification with more information about the action
+                                 * @param {string} notification.chatId The group ID the request was made for
+                                 * @param {string} notification.author The user ID that made a request
+                                 * @param {number} notification.timestamp The timestamp the request was made at
+                                 */
+                                client.emit(
+                                    Events.GROUP_MEMBERSHIP_REQUEST,
+                                    notification
+                                );
+                            } else {
+                                /**
+                                 * Emitted when group settings are updated, such as subject, description or picture.
+                                 * @event Client#group_update
+                                 * @param {GroupNotification} notification GroupNotification with more information about the action
+                                 */
+                                client.emit(Events.GROUP_UPDATE, notification);
+                            }
+                            return;
+                        }
 
-                const message = new Message(client, msg);
+                        const message = new Message(client, msg);
 
-                /**
-                 * Emitted when a new message is created, which may include the current user's own messages.
-                 * @event Client#message_create
-                 * @param {Message} message The message that was created
-                 */
-                client.emit(Events.MESSAGE_CREATE, message);
+                        /**
+                         * Emitted when a new message is created, which may include the current user's own messages.
+                         * @event Client#message_create
+                         * @param {Message} message The message that was created
+                         */
+                        client.emit(Events.MESSAGE_CREATE, message);
 
-                if (msg.id.fromMe) return;
+                        if (msg.id.fromMe) return;
 
-                /**
-                 * Emitted when a new message is received.
-                 * @event Client#message
-                 * @param {Message} message The message that was received
-                 */
-                client.emit(Events.MESSAGE_RECEIVED, message);
-            })
+                        /**
+                         * Emitted when a new message is received.
+                         * @event Client#message
+                         * @param {Message} message The message that was received
+                         */
+                        client.emit(Events.MESSAGE_RECEIVED, message);
+                    },
+                    25
+                )
+            )
         );
 
         let last_message;
@@ -982,15 +1064,15 @@ class Client extends EventEmitter {
                     WAState.TIMEOUT,
                 ];
 
-                if (this.options.takeoverOnConflict) {
+                if (client.options.takeoverOnConflict) {
                     ACCEPTED_STATES.push(WAState.CONFLICT);
 
                     if (state === WAState.CONFLICT) {
                         setTimeout(() => {
-                            this.pupPage.evaluate(() =>
+                            client.pupPage.evaluate(() =>
                                 window.Store.AppState.takeover()
                             );
-                        }, this.options.takeoverTimeoutMs);
+                        }, client.options.takeoverTimeoutMs);
                     }
                 }
 
@@ -1000,9 +1082,9 @@ class Client extends EventEmitter {
                      * @event Client#disconnected
                      * @param {WAState|"LOGOUT"} reason reason that caused the disconnect
                      */
-                    await this.authStrategy.disconnect();
-                    this.emit(Events.DISCONNECTED, state);
-                    this.destroy();
+                    await client.authStrategy.disconnect();
+                    client.emit(Events.DISCONNECTED, state);
+                    client.destroy();
                 }
             })
         );
@@ -1023,7 +1105,7 @@ class Client extends EventEmitter {
                  * @param {boolean} batteryInfo.plugged - Indicates if the phone is plugged in (true) or not (false)
                  * @deprecated
                  */
-                this.emit(Events.BATTERY_CHANGED, { battery, plugged });
+                client.emit(Events.BATTERY_CHANGED, { battery, plugged });
             })
         );
 
@@ -1041,8 +1123,8 @@ class Client extends EventEmitter {
              * @param {boolean} call.webClientShouldHandle - If Waweb should handle
              * @param {object} call.participants - Participants
              */
-            const cll = new Call(this, call);
-            this.emit(Events.INCOMING_CALL, cll);
+            const cll = new Call(client, call);
+            client.emit(Events.INCOMING_CALL, cll);
         });
 
         await exposeFunctionIfAbsent(
@@ -1065,9 +1147,9 @@ class Client extends EventEmitter {
                      * @param {?number} reaction.ack - Ack
                      */
 
-                    this.emit(
+                    client.emit(
                         Events.MESSAGE_REACTION,
-                        new Reaction(this, reaction)
+                        new Reaction(client, reaction)
                     );
                 }
             })
@@ -1077,14 +1159,14 @@ class Client extends EventEmitter {
             this.pupPage,
             "onRemoveChatEvent",
             mark(async (chat) => {
-                const _chat = await this.getChatById(chat.id);
+                const _chat = await client.getChatById(chat.id);
 
                 /**
                  * Emitted when a chat is removed
                  * @event Client#chat_removed
                  * @param {Chat} chat
                  */
-                this.emit(Events.CHAT_REMOVED, _chat);
+                client.emit(Events.CHAT_REMOVED, _chat);
             })
         );
 
@@ -1092,7 +1174,7 @@ class Client extends EventEmitter {
             this.pupPage,
             "onArchiveChatEvent",
             mark(async (chat, currState, prevState) => {
-                const _chat = await this.getChatById(chat.id);
+                const _chat = await client.getChatById(chat.id);
 
                 /**
                  * Emitted when a chat is archived/unarchived
@@ -1101,7 +1183,7 @@ class Client extends EventEmitter {
                  * @param {boolean} currState
                  * @param {boolean} prevState
                  */
-                this.emit(Events.CHAT_ARCHIVED, _chat, currState, prevState);
+                client.emit(Events.CHAT_ARCHIVED, _chat, currState, prevState);
             })
         );
 
@@ -1119,9 +1201,9 @@ class Client extends EventEmitter {
                  * @param {string} newBody
                  * @param {string} prevBody
                  */
-                this.emit(
+                client.emit(
                     Events.MESSAGE_EDIT,
-                    new Message(this, msg),
+                    new Message(client, msg),
                     newBody,
                     prevBody
                 );
@@ -1137,7 +1219,10 @@ class Client extends EventEmitter {
                  * @event Client#message_ciphertext
                  * @param {Message} message
                  */
-                this.emit(Events.MESSAGE_CIPHERTEXT, new Message(this, msg));
+                client.emit(
+                    Events.MESSAGE_CIPHERTEXT,
+                    new Message(client, msg)
+                );
             })
         );
 
@@ -2642,81 +2727,50 @@ class Client extends EventEmitter {
     async reinitializeCryptoStore() {
         if (!this.pupPage || this.pupPage.isClosed()) return;
 
-        // Ensure MessageTypes is available and CIPHERTEXT is defined
-        const CIPHERTEXT_TYPE_VALUE =
-            typeof MessageTypes !== "undefined" && MessageTypes.CIPHERTEXT
-                ? MessageTypes.CIPHERTEXT
-                : "ciphertext"; // fallback if not defined
-
-        await this.pupPage.evaluate(async (CIPHERTEXT_TYPE_VALUE) => {
+        await this.pupPage.evaluate(() => {
+            // Simple crypto reinitialization without dangerous event handler patching
             if (
                 window.Store?.CryptoLib &&
                 typeof window.Store.CryptoLib.initializeWebCrypto === "function"
             ) {
-                // Reinitialize the crypto state
-                window.Store.CryptoLib.initializeWebCrypto();
+                try {
+                    window.Store.CryptoLib.initializeWebCrypto();
+                    console.log(
+                        `[${
+                            window.wwebjs_client_id || "default"
+                        }] Crypto store reinitialized`
+                    );
+                } catch (error) {
+                    console.warn(
+                        `[${
+                            window.wwebjs_client_id || "default"
+                        }] Failed to reinitialize crypto store:`,
+                        error
+                    );
+                }
             }
 
-            // Patch message handler to decrypt immediately
-            if (
-                window.Store?.Msg &&
-                typeof window.Store.Msg.on === "function"
-            ) {
-                const originalAddHandler = window.Store.Msg.on;
-                window.Store.Msg.on = function (event, handler) {
-                    if (event === "add") {
-                        return originalAddHandler.call(
-                            this,
-                            event,
-                            async (msg) => {
-                                if (msg && msg.isNewMsg) {
-                                    if (msg.type === CIPHERTEXT_TYPE_VALUE) {
-                                        if (
-                                            window.Store?.CryptoLib &&
-                                            typeof window.Store.CryptoLib
-                                                .decryptE2EMessage ===
-                                                "function"
-                                        ) {
-                                            await window.Store.CryptoLib.decryptE2EMessage(
-                                                msg
-                                            );
-                                        }
-                                        if (
-                                            typeof msg.once === "function" &&
-                                            window.onAddMessageEvent &&
-                                            window.WWebJS?.getMessageModel
-                                        ) {
-                                            msg.once("change:type", (_msg) =>
-                                                window.onAddMessageEvent(
-                                                    window.WWebJS.getMessageModel(
-                                                        _msg
-                                                    )
-                                                )
-                                            );
-                                        }
-                                        if (
-                                            window.onAddMessageCiphertextEvent &&
-                                            window.WWebJS?.getMessageModel
-                                        ) {
-                                            window.onAddMessageCiphertextEvent(
-                                                window.WWebJS.getMessageModel(
-                                                    msg
-                                                )
-                                            );
-                                        }
-                                    } else {
-                                        if (typeof handler === "function") {
-                                            handler(msg);
-                                        }
-                                    }
-                                }
+            // Force decrypt any pending ciphertext messages
+            if (window.Store?.Msg) {
+                const ciphertextMessages = window.Store.Msg.filter(
+                    (msg) => msg.type === "ciphertext"
+                );
+                ciphertextMessages.forEach((msg) => {
+                    if (window.Store?.CryptoLib?.decryptE2EMessage) {
+                        window.Store.CryptoLib.decryptE2EMessage(msg).catch(
+                            (err) => {
+                                console.warn(
+                                    `[${
+                                        window.wwebjs_client_id || "default"
+                                    }] Failed to decrypt message:`,
+                                    err
+                                );
                             }
                         );
                     }
-                    return originalAddHandler.call(this, event, handler);
-                };
+                });
             }
-        }, MessageTypes.CIPHERTEXT);
+        });
     }
 }
 
