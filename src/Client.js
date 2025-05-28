@@ -135,6 +135,13 @@ class Client extends EventEmitter {
     }
 
     async inject() {
+        if (!this.pupPage || this.pupPage.isClosed() || this.lastLoggedOut) {
+            console.log(
+                `[${this.clientId}] [DEBUG] Skipping inject - page closed or logged out`
+            );
+            return;
+        }
+
         let hasReloaded = false;
         const client = this;
         let lastPercent = null; // Move this to the top for broader scope
@@ -529,7 +536,11 @@ class Client extends EventEmitter {
         } else {
             browser = await puppeteer.launch({
                 ...puppeteerOpts,
-                args: puppeteerOpts.args || [],
+                args: [
+                    "--disable-features=VizDisplayCompositor,BluetoothAdapter",
+                    "--disable-permissions-policy=bluetooth",
+                    ...(puppeteerOpts.args || []),
+                ],
                 waitForInitialPage: false,
             });
         }
@@ -574,7 +585,6 @@ class Client extends EventEmitter {
             }));
             this.info = new ClientInfo(this, infoData);
             this.interface = new InterfaceController(this);
-
             this.emit(Events.READY);
             this.authStrategy.afterAuthReady();
             await this.attachEventListeners();
