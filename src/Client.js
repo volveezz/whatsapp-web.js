@@ -601,6 +601,22 @@ class Client extends EventEmitter {
                 return;
             }
 
+            const isAuthenticated = await page.evaluate(() => {
+                return !!(
+                    window.Store &&
+                    window.Store.User &&
+                    window.Store.Conn &&
+                    typeof window.Store.User.getMeUser === "function"
+                );
+            });
+
+            if (!isAuthenticated) {
+                console.log(
+                    `[${this.clientId}] [DEBUG] Store not ready or not authenticated, skipping ready emission`
+                );
+                return;
+            }
+
             const infoData = await page.evaluate(() => ({
                 ...window.Store.Conn.serialize(),
                 wid: window.Store.User.getMeUser(),
