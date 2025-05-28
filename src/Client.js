@@ -338,6 +338,9 @@ class Client extends EventEmitter {
                 this.pupPage,
                 "onAppStateHasSyncedEvent",
                 async () => {
+                    // Reset logout flag when authentication syncs successfully
+                    client.lastLoggedOut = false;
+
                     client.emit(
                         Events.AUTHENTICATED,
                         await client.authStrategy.getAuthEventPayload()
@@ -412,6 +415,14 @@ class Client extends EventEmitter {
                         await new Promise((resolve) =>
                             setTimeout(resolve, 3000)
                         );
+                    }
+
+                    // Don't emit ready if we've been logged out
+                    if (client.lastLoggedOut) {
+                        console.log(
+                            `[${client.clientId}] [DEBUG] Skipping ready emission in onAppStateHasSyncedEvent - client logged out`
+                        );
+                        return;
                     }
 
                     /**
@@ -513,6 +524,9 @@ class Client extends EventEmitter {
      * Sets up events and requirements, kicks off authentication request
      */
     async initialize() {
+        // Reset logout flag at the start of initialization
+        this.lastLoggedOut = false;
+
         let /**
              * @type {puppeteer.Browser}
              */
@@ -579,6 +593,14 @@ class Client extends EventEmitter {
             });
             await this.debouncedInject();
         } else {
+            // Don't emit ready if we've been logged out
+            if (this.lastLoggedOut) {
+                console.log(
+                    `[${this.clientId}] [DEBUG] Skipping ready emission - client logged out`
+                );
+                return;
+            }
+
             const infoData = await page.evaluate(() => ({
                 ...window.Store.Conn.serialize(),
                 wid: window.Store.User.getMeUser(),
@@ -628,6 +650,14 @@ class Client extends EventEmitter {
                 await this.authStrategy.afterBrowserInitialized();
                 await this.destroy();
                 this.lastLoggedOut = false;
+                return;
+            }
+
+            // Skip any operations if we've been logged out
+            if (this.lastLoggedOut) {
+                console.log(
+                    `[${this.clientId}] [DEBUG] Skipping framenavigated - client logged out`
+                );
                 return;
             }
 
@@ -1446,6 +1476,8 @@ class Client extends EventEmitter {
      * Logs out the client, closing the current session
      */
     async logout() {
+        this.lastLoggedOut = true;
+
         await this.pupPage
             ?.evaluate(() => {
                 if (
@@ -2084,6 +2116,12 @@ class Client extends EventEmitter {
             );
             return undefined;
         }
+
+        // Wait for WidFactory to be available
+        await this.pupPage.waitForFunction(
+            "window.Store && window.Store.WidFactory",
+            { timeout: 10000 }
+        );
 
         const profilePic = await this.pupPage.evaluate(async (contactId) => {
             try {
