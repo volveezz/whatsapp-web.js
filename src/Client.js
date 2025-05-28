@@ -142,6 +142,25 @@ class Client extends EventEmitter {
         const reloadHandler = async () => {
             hasReloaded = true;
         };
+
+        // Clean up any previously exposed functions to prevent conflicts
+        try {
+            const existingFunctions = [
+                "onQRChangedEvent",
+                "onOfflineProgressUpdateEvent",
+                "onAuthAppStateChangedEvent",
+                "onAppStateHasSyncedEvent",
+                "onLogoutEvent",
+            ];
+            for (const funcName of existingFunctions) {
+                await this.pupPage
+                    .removeExposedFunction(funcName)
+                    .catch(() => {});
+            }
+        } catch (err) {
+            // Ignore cleanup errors
+        }
+
         try {
             this.pupPage.on("framenavigated", reloadHandler);
 
