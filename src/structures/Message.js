@@ -546,9 +546,9 @@ class Message extends Base {
                     while (
                         msg.mediaData.mediaStage !== "RESOLVED" &&
                         !msg.mediaData.mediaStage.includes("ERROR") &&
-                        tries++ < 10
+                        tries++ < 30 // 30 retries = 300 seconds
                     ) {
-                        await new Promise((res) => setTimeout(res, 1000));
+                        await new Promise((res) => setTimeout(res, 10000));
                     }
 
                     if (msg.mediaData.mediaStage !== "RESOLVED") {
