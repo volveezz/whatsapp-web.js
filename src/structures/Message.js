@@ -548,6 +548,13 @@ class Message extends Base {
                         !msg.mediaData.mediaStage.includes("ERROR") &&
                         tries++ < 30 // 30 retries = 300 seconds
                     ) {
+                        // Redownload the media every 30 seconds
+                        if (tries % 3 === 0) {
+                            await msg.downloadMedia({
+                                downloadEvenIfExpensive: true,
+                                rmrReason: 1,
+                            });
+                        }
                         await new Promise((res) => setTimeout(res, 10000));
                     }
 
