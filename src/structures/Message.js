@@ -644,9 +644,8 @@ class Message extends Base {
                 const status = { ok: true };
 
                 try {
-                    const msg = (
-                        await window.Store.Msg.getMessagesById([msgId])
-                    )?.messages?.[0];
+                    let msg = (await window.Store.Msg.getMessagesById([msgId]))
+                        ?.messages?.[0];
 
                     if (!msg) {
                         status.ok = false;
@@ -666,7 +665,7 @@ class Message extends Base {
 
                     if (msg.mediaData.mediaStage !== "RESOLVED") {
                         console.log(
-                            `${logPrefix} Media not resolved. Calling msg.downloadMedia().`
+                            `${logPrefix} Media not resolved, downloading`
                         );
                         await msg.downloadMedia({
                             downloadEvenIfExpensive: true,
@@ -685,6 +684,11 @@ class Message extends Base {
                         ) {
                             // Redownload the media every 30 seconds
                             if (tries % 3 === 0) {
+                                msg = (
+                                    await window.Store.Msg.getMessagesById([
+                                        msgId,
+                                    ])
+                                )?.messages?.[0];
                                 await msg.downloadMedia({
                                     downloadEvenIfExpensive: true,
                                     rmrReason: 1,
