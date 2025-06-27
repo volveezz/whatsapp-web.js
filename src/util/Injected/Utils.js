@@ -13,7 +13,7 @@ exports.LoadUtils = () => {
             return window.Store.ForwardUtils.forwardMessagesToChats(
                 [msg],
                 [chat],
-                false
+                false,
             );
         } else {
             return chat.forwardMessages([msg]);
@@ -142,7 +142,7 @@ exports.LoadUtils = () => {
                         return (await window.Store.QueryExist(wid))
                             ? wid
                             : null;
-                    })
+                    }),
                 )
             ).filter(Boolean);
         }
@@ -206,10 +206,10 @@ exports.LoadUtils = () => {
             delete options.contactCard;
         } else if (options.contactCardList) {
             const contacts = options.contactCardList.map((c) =>
-                window.Store.Contact.get(c)
+                window.Store.Contact.get(c),
             );
             const vcards = contacts.map((c) =>
-                window.Store.VCard.vcardFromContactModel(c)
+                window.Store.VCard.vcardFromContactModel(c),
             );
             vcardOptions = {
                 type: "multi_vcard",
@@ -244,9 +244,8 @@ exports.LoadUtils = () => {
             delete options.linkPreview;
             const link = window.Store.Validators.findLink(content);
             if (link) {
-                let preview = await window.Store.LinkPreview.getLinkPreview(
-                    link
-                );
+                let preview =
+                    await window.Store.LinkPreview.getLinkPreview(link);
                 if (preview?.data) {
                     preview = preview.data;
                     preview.preview = true;
@@ -307,18 +306,18 @@ exports.LoadUtils = () => {
         const botOptions = {};
         if (options.invokedBotWid) {
             botOptions.messageSecret = window.crypto.getRandomValues(
-                new Uint8Array(32)
+                new Uint8Array(32),
             );
             botOptions.botMessageSecret =
                 await window.Store.BotSecret.genBotMsgSecretFromMsgSecret(
-                    botOptions.messageSecret
+                    botOptions.messageSecret,
                 );
             botOptions.invokedBotWid = window.Store.WidFactory.createWid(
-                options.invokedBotWid
+                options.invokedBotWid,
             );
             botOptions.botPersonaId =
                 window.Store.BotProfiles.BotProfileCollection.get(
-                    options.invokedBotWid
+                    options.invokedBotWid,
                 ).personaId;
             delete options.invokedBotWid;
         }
@@ -375,6 +374,9 @@ exports.LoadUtils = () => {
          * 12. DISPATCH                                                       *
          * ------------------------------------------------------------------ */
         await window.Store.SendMessage.addAndSendMsgToChat(chat, message);
+        await window.Store.HistorySync.sendPeerDataOperationRequest(3, {
+            chatId: chat.id,
+        });
         return window.Store.Msg.get(msgKey._serialized);
     };
 
@@ -389,7 +391,7 @@ exports.LoadUtils = () => {
                     if (await window.Store.QueryExist(wid)) {
                         return wid;
                     }
-                })
+                }),
             );
             options.mentionedJidList = options.mentionedJidList.filter(Boolean);
         }
@@ -405,9 +407,8 @@ exports.LoadUtils = () => {
             delete options.linkPreview;
             const link = window.Store.Validators.findLink(content);
             if (link) {
-                const preview = await window.Store.LinkPreview.getLinkPreview(
-                    link
-                );
+                const preview =
+                    await window.Store.LinkPreview.getLinkPreview(link);
                 preview.preview = true;
                 preview.subtype = "url";
                 options = { ...options, ...preview };
@@ -422,7 +423,7 @@ exports.LoadUtils = () => {
         await window.Store.EditMessage.sendMessageEdit(
             msg,
             content,
-            internalOptions
+            internalOptions,
         );
         return window.Store.Msg.get(msg.id._serialized);
     };
@@ -472,7 +473,7 @@ exports.LoadUtils = () => {
 
     window.WWebJS.processMediaData = async (
         mediaInfo,
-        { forceVoice, forceDocument, forceGif }
+        { forceVoice, forceDocument, forceGif },
     ) => {
         const file =
             mediaInfo instanceof File
@@ -491,30 +492,30 @@ exports.LoadUtils = () => {
         const logPrefix = `[${clientId}][${fileIdentifier}]`;
 
         console.log(
-            `${logPrefix} [WWebJS:processMediaData] Creating OpaqueData`
+            `${logPrefix} [WWebJS:processMediaData] Creating OpaqueData`,
         );
         const mData = await window.Store.OpaqueData.createFromData(
             file,
-            file.type
+            file.type,
         );
         console.log(
-            `${logPrefix} [WWebJS:processMediaData] Creating MediaPrep`
+            `${logPrefix} [WWebJS:processMediaData] Creating MediaPrep`,
         );
         const mediaPrep = window.Store.MediaPrep.prepRawMedia(mData, {
             asDocument: forceDocument,
         });
         console.log(
-            `${logPrefix} [WWebJS:processMediaData] Waiting for MediaPrep`
+            `${logPrefix} [WWebJS:processMediaData] Waiting for MediaPrep`,
         );
         const mediaData = await mediaPrep.waitForPrep();
         console.log(
-            `${logPrefix} [WWebJS:processMediaData] Creating MediaObject`
+            `${logPrefix} [WWebJS:processMediaData] Creating MediaObject`,
         );
         const mediaObject = window.Store.MediaObject.getOrCreateMediaObject(
-            mediaData.filehash
+            mediaData.filehash,
         );
         console.log(
-            `${logPrefix} [WWebJS:processMediaData] Creating MediaType`
+            `${logPrefix} [WWebJS:processMediaData] Creating MediaType`,
         );
         const mediaType = window.Store.MediaTypes.msgToMediaType({
             type: mediaData.type,
@@ -536,11 +537,11 @@ exports.LoadUtils = () => {
         if (!(mediaData.mediaBlob instanceof window.Store.OpaqueData)) {
             mediaData.mediaBlob = await window.Store.OpaqueData.createFromData(
                 mediaData.mediaBlob,
-                mediaData.mediaBlob.type
+                mediaData.mediaBlob.type,
             );
         }
         console.log(
-            `${logPrefix} [WWebJS:processMediaData] Creating RenderableUrl`
+            `${logPrefix} [WWebJS:processMediaData] Creating RenderableUrl`,
         );
         mediaData.renderableUrl = mediaData.mediaBlob.url();
         mediaObject.consolidate(mediaData.toJSON());
@@ -560,12 +561,12 @@ exports.LoadUtils = () => {
         console.log(
             `${logPrefix} [WWebJS:processMediaData] Uploaded Media, took ${
                 end - start
-            } ms`
+            } ms`,
         );
         const mediaEntry = uploadedMedia.mediaEntry;
         if (!mediaEntry) {
             throw new Error(
-                `${logPrefix} upload failed: media entry was not created`
+                `${logPrefix} upload failed: media entry was not created`,
             );
         }
 
@@ -584,7 +585,7 @@ exports.LoadUtils = () => {
         });
 
         console.log(
-            `${logPrefix} [WWebJS:processMediaData] Returning MediaData`
+            `${logPrefix} [WWebJS:processMediaData] Returning MediaData`,
         );
         return mediaData;
     };
@@ -595,11 +596,11 @@ exports.LoadUtils = () => {
         msg.isEphemeral = message.isEphemeral;
         msg.isStatusV3 = message.isStatusV3;
         msg.links = window.Store.Validators.findLinks(
-            message.mediaObject ? message.caption : message.body
+            message.mediaObject ? message.caption : message.body,
         ).map((link) => ({
             link: link.href,
             isSuspicious: Boolean(
-                link.suspiciousCharacters && link.suspiciousCharacters.size
+                link.suspiciousCharacters && link.suspiciousCharacters.size,
             ),
         }));
 
@@ -632,7 +633,7 @@ exports.LoadUtils = () => {
         }
         if (msg.dynamicReplyButtons) {
             msg.dynamicReplyButtons = JSON.parse(
-                JSON.stringify(msg.dynamicReplyButtons)
+                JSON.stringify(msg.dynamicReplyButtons),
             );
         }
         if (msg.replyButtons) {
@@ -670,7 +671,7 @@ exports.LoadUtils = () => {
         if (chat.groupMetadata) {
             res.isGroup = true;
             const chatWid = window.Store.WidFactory.createWid(
-                chat.id._serialized
+                chat.id._serialized,
             );
             await window.Store.GroupMetadata.update(chatWid);
             res.groupMetadata = chat.groupMetadata.serialize();
@@ -708,7 +709,7 @@ exports.LoadUtils = () => {
         const chats = window.Store.Chat.getModelsArray();
 
         const chatPromises = chats.map((chat) =>
-            window.WWebJS.getChatModel(chat)
+            window.WWebJS.getChatModel(chat),
         );
         return await Promise.all(chatPromises);
     };
@@ -726,7 +727,7 @@ exports.LoadUtils = () => {
         const useOldImplementation = window.compareWwebVersions(
             window.Debug.VERSION,
             "<",
-            "2.2327.4"
+            "2.2327.4",
         );
 
         res.isMe = useOldImplementation
@@ -776,9 +777,8 @@ exports.LoadUtils = () => {
     window.WWebJS.getContact = async (contactId) => {
         const wid = window.Store.WidFactory.createWid(contactId);
         const contact = await window.Store.Contact.find(wid);
-        const bizProfile = await window.Store.BusinessProfile.fetchBizProfile(
-            wid
-        );
+        const bizProfile =
+            await window.Store.BusinessProfile.fetchBizProfile(wid);
         bizProfile.profileOptions && (contact.businessProfile = bizProfile);
         return window.WWebJS.getContactModel(contact);
     };
@@ -786,7 +786,7 @@ exports.LoadUtils = () => {
     window.WWebJS.getContacts = () => {
         const contacts = window.Store.Contact.getModelsArray();
         return contacts.map((contact) =>
-            window.WWebJS.getContactModel(contact)
+            window.WWebJS.getContactModel(contact),
         );
     };
 
@@ -843,7 +843,7 @@ exports.LoadUtils = () => {
         var charactersLength = characters.length;
         for (var i = 0; i < length; i++) {
             result += characters.charAt(
-                Math.floor(Math.random() * charactersLength)
+                Math.floor(Math.random() * charactersLength),
             );
         }
         return result;
@@ -876,7 +876,7 @@ exports.LoadUtils = () => {
             const normalizedData = filteredData.map((n) => n * multiplier);
 
             const waveform = new Uint8Array(
-                normalizedData.map((n) => Math.floor(100 * n))
+                normalizedData.map((n) => Math.floor(100 * n)),
             );
 
             return waveform;
@@ -952,7 +952,7 @@ exports.LoadUtils = () => {
             orderId,
             80,
             80,
-            token
+            token,
         );
     };
 
@@ -960,7 +960,7 @@ exports.LoadUtils = () => {
         let sellerId = window.Store.Conn.wid;
         let product = await window.Store.QueryProduct.queryProduct(
             sellerId,
-            productId
+            productId,
         );
         if (product && product.data) {
             return product.data;
@@ -986,7 +986,7 @@ exports.LoadUtils = () => {
                     "call-creator": window.Store.SocketWap.USER_JID(peerJid),
                     count: "0",
                 }),
-            ]
+            ],
         );
         await window.Store.Socket.deprecatedCastStanza(stanza);
     };
@@ -1005,7 +1005,7 @@ exports.LoadUtils = () => {
                 quality: 0.75,
                 asDataUrl: false,
             },
-            options
+            options,
         );
 
         const img = await new Promise((resolve, reject) => {
@@ -1056,7 +1056,7 @@ exports.LoadUtils = () => {
             const res = await window.Store.GroupUtils.sendSetPicture(
                 chatWid,
                 thumbnail,
-                profilePic
+                profilePic,
             );
             return res ? res.status === 200 : false;
         } catch (err) {
@@ -1071,9 +1071,8 @@ exports.LoadUtils = () => {
             const collection = window.Store.ProfilePicThumb.get(chatid);
             if (!collection.canDelete()) return;
 
-            const res = await window.Store.GroupUtils.requestDeletePicture(
-                chatWid
-            );
+            const res =
+                await window.Store.GroupUtils.requestDeletePicture(chatWid);
             return res ? res.status === 200 : false;
         } catch (err) {
             if (err.name === "ServerStatusCodeError") return false;
@@ -1082,9 +1081,8 @@ exports.LoadUtils = () => {
     };
 
     window.WWebJS.getProfilePicThumbToBase64 = async (chatWid) => {
-        const profilePicCollection = await window.Store.ProfilePicThumb.find(
-            chatWid
-        );
+        const profilePicCollection =
+            await window.Store.ProfilePicThumb.find(chatWid);
 
         const _readImageAsBase64 = (imageBlob) => {
             return new Promise((resolve) => {
@@ -1186,7 +1184,7 @@ exports.LoadUtils = () => {
     window.WWebJS.getAddParticipantsRpcResult = async (
         groupMetadata,
         groupWid,
-        participantWid
+        participantWid,
     ) => {
         const participantLidArgs = groupMetadata?.isLidAddressingMode
             ? {
@@ -1201,11 +1199,11 @@ exports.LoadUtils = () => {
             ? [
                   {
                       participantJid: window.Store.WidToJid.widToUserJid(
-                          participantLidArgs.lid
+                          participantLidArgs.lid,
                       ),
                       phoneNumberMixinArgs: {
                           anyPhoneNumber: window.Store.WidToJid.widToUserJid(
-                              participantLidArgs.phoneNumber
+                              participantLidArgs.phoneNumber,
                           ),
                       },
                   },
@@ -1213,7 +1211,7 @@ exports.LoadUtils = () => {
             : [
                   {
                       participantJid: window.Store.WidToJid.widToUserJid(
-                          participantLidArgs.phoneNumber
+                          participantLidArgs.phoneNumber,
                       ),
                   },
               ];
@@ -1222,7 +1220,7 @@ exports.LoadUtils = () => {
         const isOldImpl = window.compareWwebVersions(
             window.Debug.VERSION,
             "<=",
-            "2.2335.9"
+            "2.2335.9",
         );
         const data = {
             name: undefined,
@@ -1271,7 +1269,7 @@ exports.LoadUtils = () => {
         groupId,
         action,
         requesterIds,
-        sleep
+        sleep,
     ) => {
         const groupWid = window.Store.WidFactory.createWid(groupId);
         const group = await window.Store.Chat.find(groupWid);
@@ -1285,12 +1283,12 @@ exports.LoadUtils = () => {
         if (!requesterIds?.length) {
             membershipRequests =
                 group.groupMetadata.membershipApprovalRequests._models.map(
-                    ({ id }) => id
+                    ({ id }) => id,
                 );
         } else {
             !Array.isArray(requesterIds) && (requesterIds = [requesterIds]);
             membershipRequests = requesterIds.map((r) =>
-                window.Store.WidFactory.createWid(r)
+                window.Store.WidFactory.createWid(r),
             );
         }
 
@@ -1346,7 +1344,7 @@ exports.LoadUtils = () => {
                             iqTo: groupJid,
                             [toApprove ? "approveArgs" : "rejectArgs"]:
                                 participant,
-                        }
+                        },
                     );
 
                 if (
@@ -1366,7 +1364,7 @@ exports.LoadUtils = () => {
                                       ?.value.error;
                             return {
                                 requesterId: window.Store.WidFactory.createWid(
-                                    p.jid
+                                    p.jid,
                                 )._serialized,
                                 ...(error
                                     ? {
@@ -1389,7 +1387,7 @@ exports.LoadUtils = () => {
                 } else {
                     result.push({
                         requesterId: window.Store.JidToWid.userJidToUserWid(
-                            participant.participantArgs[0].participantJid
+                            participant.participantArgs[0].participantJid,
                         )._serialized,
                         message: "ServerStatusCodeError",
                     });
@@ -1400,7 +1398,7 @@ exports.LoadUtils = () => {
                     participantArgs.indexOf(participant) !==
                         participantArgs.length - 1 &&
                     (await new Promise((resolve) =>
-                        setTimeout(resolve, _getSleepTime(sleep))
+                        setTimeout(resolve, _getSleepTime(sleep)),
                     ));
             }
             return result;
@@ -1417,7 +1415,7 @@ exports.LoadUtils = () => {
         const response = await window.Store.pinUnpinMsg(
             message,
             action,
-            duration
+            duration,
         );
         return response.messageSendResult === "OK";
     };
@@ -1426,7 +1424,7 @@ exports.LoadUtils = () => {
         let res = status.serialize();
         delete res._msgs;
         res.msgs = status._msgs.map((msg) =>
-            window.WWebJS.getMessageModel(msg)
+            window.WWebJS.getMessageModel(msg),
         );
         return res;
     };
