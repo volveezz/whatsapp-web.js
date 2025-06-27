@@ -37,9 +37,9 @@ class PollVote extends Base {
         this.selectedOptions =
             data.selectedOptionLocalIds.length > 0
                 ? data.selectedOptionLocalIds.map((e) => ({
-                    name: data.parentMessage.pollOptions.find((x) => x.localId === e).name,
-                    localId: e
-                }))
+                      name: data.parentMessage.pollOptions.find((x) => x.localId === e).name,
+                      localId: e,
+                  }))
                 : [];
 
         /**

@@ -12,11 +12,11 @@ The `Message` class now includes a `getLinkPreview()` method that returns link p
 
 ```javascript
 // Handle incoming messages
-client.on("message", async (msg) => {
+client.on('message', async (msg) => {
     const linkPreview = msg.getLinkPreview();
 
     if (linkPreview) {
-        console.log("Link preview found:");
+        console.log('Link preview found:');
         console.log(`Title: ${linkPreview.title}`);
         console.log(`Description: ${linkPreview.description}`);
 
@@ -34,7 +34,7 @@ client.on("message", async (msg) => {
 The same method works for message creation events (messages sent by yourself):
 
 ```javascript
-client.on("message_create", async (msg) => {
+client.on('message_create', async (msg) => {
     const linkPreview = msg.getLinkPreview();
 
     if (linkPreview) {
@@ -65,21 +65,21 @@ The `getLinkPreview()` method returns an object with the following properties:
 The `Message` class now includes a `downloadLinkPreviewThumbnail()` method that downloads the link preview thumbnail and returns it as a `MessageMedia` object:
 
 ```javascript
-client.on("message", async (msg) => {
+client.on('message', async (msg) => {
     // Download the thumbnail if available
     const thumbnail = await msg.downloadLinkPreviewThumbnail();
 
     if (thumbnail) {
-        console.log("Thumbnail downloaded:");
+        console.log('Thumbnail downloaded:');
         console.log(`MIME type: ${thumbnail.mimetype}`);
         console.log(`Filename: ${thumbnail.filename}`);
 
         // You can use this MessageMedia object to send the image
         const chat = await msg.getChat();
-        chat.sendMessage(thumbnail, { caption: "Link preview thumbnail" });
+        chat.sendMessage(thumbnail, { caption: 'Link preview thumbnail' });
 
         // Or you can save it to a file
-        thumbnail.toFilePath("./thumbnail.jpg");
+        thumbnail.toFilePath('./thumbnail.jpg');
     }
 });
 ```
@@ -87,7 +87,7 @@ client.on("message", async (msg) => {
 This method is especially useful for reliably capturing thumbnails from message_create events:
 
 ```javascript
-client.on("message_create", async (msg) => {
+client.on('message_create', async (msg) => {
     // When you or another device sends a link
     const thumbnail = await msg.downloadLinkPreviewThumbnail();
     if (thumbnail) {
@@ -103,23 +103,23 @@ If you prefer to handle the HTTP requests yourself, you can still use the URL fr
 
 ```javascript
 // Save link preview thumbnails to disk
-const fs = require("fs");
-const https = require("https");
-const path = require("path");
+const fs = require('fs');
+const https = require('https');
+const path = require('path');
 
-client.on("message", async (msg) => {
+client.on('message', async (msg) => {
     const linkPreview = msg.getLinkPreview();
 
     if (linkPreview && linkPreview.thumbnailUrl) {
         const fileName = `thumbnail_${Date.now()}.jpg`;
-        const filePath = path.join(__dirname, "thumbnails", fileName);
+        const filePath = path.join(__dirname, 'thumbnails', fileName);
 
         // Download the image
         https.get(linkPreview.thumbnailUrl, (response) => {
             const writeStream = fs.createWriteStream(filePath);
             response.pipe(writeStream);
 
-            writeStream.on("finish", () => {
+            writeStream.on('finish', () => {
                 console.log(`Saved thumbnail to ${filePath}`);
             });
         });
@@ -129,6 +129,6 @@ client.on("message", async (msg) => {
 
 ## Notes
 
--   Link preview generation is automatic in WhatsApp and depends on the linked content
--   Some links may not generate previews or thumbnails
--   The availability of preview data depends on the type of link and how WhatsApp processes it
+- Link preview generation is automatic in WhatsApp and depends on the linked content
+- Some links may not generate previews or thumbnails
+- The availability of preview data depends on the type of link and how WhatsApp processes it

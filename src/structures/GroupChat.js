@@ -1,6 +1,6 @@
-"use strict";
+'use strict';
 
-const Chat = require("./Chat");
+const Chat = require('./Chat');
 
 /**
  * Group participant information
@@ -78,38 +78,28 @@ class GroupChat extends Chat {
     async addParticipants(participantIds, options = {}) {
         return await this.client.pupPage.evaluate(
             async (groupId, participantIds, options) => {
-                const {
-                    sleep = [250, 500],
-                    autoSendInviteV4 = true,
-                    comment = "",
-                } = options;
+                const { sleep = [250, 500], autoSendInviteV4 = true, comment = '' } = options;
                 const participantData = {};
 
-                !Array.isArray(participantIds) &&
-                    (participantIds = [participantIds]);
+                !Array.isArray(participantIds) && (participantIds = [participantIds]);
                 const groupWid = window.Store.WidFactory.createWid(groupId);
                 const group = await window.Store.Chat.find(groupWid);
-                const participantWids = participantIds.map((p) =>
-                    window.Store.WidFactory.createWid(p)
-                );
+                const participantWids = participantIds.map((p) => window.Store.WidFactory.createWid(p));
 
                 const errorCodes = {
-                    default:
-                        "An unknown error occupied while adding a participant",
-                    isGroupEmpty:
-                        "AddParticipantsError: The participant can't be added to an empty group",
-                    iAmNotAdmin:
-                        "AddParticipantsError: You have no admin rights to add a participant to a group",
-                    200: "The participant was added successfully",
-                    403: "The participant can be added by sending private invitation only",
-                    404: "The phone number is not registered on WhatsApp",
-                    408: "You cannot add this participant because they recently left the group",
-                    409: "The participant is already a group member",
+                    default: 'An unknown error occupied while adding a participant',
+                    isGroupEmpty: "AddParticipantsError: The participant can't be added to an empty group",
+                    iAmNotAdmin: 'AddParticipantsError: You have no admin rights to add a participant to a group',
+                    200: 'The participant was added successfully',
+                    403: 'The participant can be added by sending private invitation only',
+                    404: 'The phone number is not registered on WhatsApp',
+                    408: 'You cannot add this participant because they recently left the group',
+                    409: 'The participant is already a group member',
                     417: "The participant can't be added to the community. You can invite them privately to join this group through its invite link",
                     419: "The participant can't be added because the group is full",
                 };
 
-                await window.Store.GroupQueryAndUpdate(groupWid);
+                await window.Store.GroupQueryAndUpdate({ id: groupId });
                 const groupMetadata = group.groupMetadata;
                 const groupParticipants = groupMetadata?.participants;
 
@@ -122,22 +112,14 @@ class GroupChat extends Chat {
                 }
 
                 const _getSleepTime = (sleep) => {
-                    if (
-                        !Array.isArray(sleep) ||
-                        (sleep.length === 2 && sleep[0] === sleep[1])
-                    ) {
+                    if (!Array.isArray(sleep) || (sleep.length === 2 && sleep[0] === sleep[1])) {
                         return sleep;
                     }
                     if (sleep.length === 1) {
                         return sleep[0];
                     }
-                    sleep[1] - sleep[0] < 100 &&
-                        (sleep[0] = sleep[1]) &&
-                        (sleep[1] += 100);
-                    return (
-                        Math.floor(Math.random() * (sleep[1] - sleep[0] + 1)) +
-                        sleep[0]
-                    );
+                    sleep[1] - sleep[0] < 100 && (sleep[0] = sleep[1]) && (sleep[1] += 100);
+                    return Math.floor(Math.random() * (sleep[1] - sleep[0] + 1)) + sleep[0];
                 };
 
                 for (const pWid of participantWids) {
@@ -149,9 +131,7 @@ class GroupChat extends Chat {
                         isInviteV4Sent: false,
                     };
 
-                    if (
-                        groupParticipants.some((p) => p.id._serialized === pId)
-                    ) {
+                    if (groupParticipants.some((p) => p.id._serialized === pId)) {
                         participantData[pId].code = 409;
                         participantData[pId].message = errorCodes[409];
                         continue;
@@ -163,49 +143,31 @@ class GroupChat extends Chat {
                         continue;
                     }
 
-                    const rpcResult =
-                        await window.WWebJS.getAddParticipantsRpcResult(
-                            groupMetadata,
-                            groupWid,
-                            pWid
-                        );
+                    const rpcResult = await window.WWebJS.getAddParticipantsRpcResult(groupMetadata, groupWid, pWid);
                     const { code: rpcResultCode } = rpcResult;
 
                     participantData[pId].code = rpcResultCode;
-                    participantData[pId].message =
-                        errorCodes[rpcResultCode] || errorCodes.default;
+                    participantData[pId].message = errorCodes[rpcResultCode] || errorCodes.default;
 
                     if (autoSendInviteV4 && rpcResultCode === 403) {
                         let userChat,
                             isInviteV4Sent = false;
                         window.Store.Contact.gadd(pWid, { silent: true });
 
-                        if (
-                            rpcResult.name ===
-                                "ParticipantRequestCodeCanBeSent" &&
-                            (userChat = await window.Store.Chat.find(pWid))
-                        ) {
-                            const groupName =
-                                group.formattedTitle || group.name;
-                            const res =
-                                await window.Store.GroupInviteV4.sendGroupInviteMessage(
-                                    userChat,
-                                    group.id._serialized,
-                                    groupName,
-                                    rpcResult.inviteV4Code,
-                                    rpcResult.inviteV4CodeExp,
-                                    comment,
-                                    await window.WWebJS.getProfilePicThumbToBase64(
-                                        groupWid
-                                    )
-                                );
-                            isInviteV4Sent = window.compareWwebVersions(
-                                window.Debug.VERSION,
-                                "<",
-                                "2.2335.6"
-                            )
-                                ? res === "OK"
-                                : res.messageSendResult === "OK";
+                        if (rpcResult.name === 'ParticipantRequestCodeCanBeSent' && (userChat = await window.Store.Chat.find(pWid))) {
+                            const groupName = group.formattedTitle || group.name;
+                            const res = await window.Store.GroupInviteV4.sendGroupInviteMessage(
+                                userChat,
+                                group.id._serialized,
+                                groupName,
+                                rpcResult.inviteV4Code,
+                                rpcResult.inviteV4CodeExp,
+                                comment,
+                                await window.WWebJS.getProfilePicThumbToBase64(groupWid)
+                            );
+                            isInviteV4Sent = window.compareWwebVersions(window.Debug.VERSION, '<', '2.2335.6')
+                                ? res === 'OK'
+                                : res.messageSendResult === 'OK';
                         }
 
                         participantData[pId].isInviteV4Sent = isInviteV4Sent;
@@ -213,11 +175,8 @@ class GroupChat extends Chat {
 
                     sleep &&
                         participantWids.length > 1 &&
-                        participantWids.indexOf(pWid) !==
-                            participantWids.length - 1 &&
-                        (await new Promise((resolve) =>
-                            setTimeout(resolve, _getSleepTime(sleep))
-                        ));
+                        participantWids.indexOf(pWid) !== participantWids.length - 1 &&
+                        (await new Promise((resolve) => setTimeout(resolve, _getSleepTime(sleep))));
                 }
 
                 return participantData;
@@ -236,17 +195,13 @@ class GroupChat extends Chat {
     async removeParticipants(participantIds) {
         return await this.client.pupPage.evaluate(
             async (chatId, participantIds) => {
-                const chatWid = window.Store.WidFactory.createWid(chatId);
-                const chat = await window.Store.Chat.find(chatWid);
+                const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
                 const participants = participantIds
                     .map((p) => {
                         return chat.groupMetadata.participants.get(p);
                     })
                     .filter((p) => Boolean(p));
-                await window.Store.GroupParticipants.removeParticipants(
-                    chat,
-                    participants
-                );
+                await window.Store.GroupParticipants.removeParticipants(chat, participants);
                 return { status: 200 };
             },
             this.id._serialized,
@@ -262,17 +217,13 @@ class GroupChat extends Chat {
     async promoteParticipants(participantIds) {
         return await this.client.pupPage.evaluate(
             async (chatId, participantIds) => {
-                const chatWid = window.Store.WidFactory.createWid(chatId);
-                const chat = await window.Store.Chat.find(chatWid);
+                const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
                 const participants = participantIds
                     .map((p) => {
                         return chat.groupMetadata.participants.get(p);
                     })
                     .filter((p) => Boolean(p));
-                await window.Store.GroupParticipants.promoteParticipants(
-                    chat,
-                    participants
-                );
+                await window.Store.GroupParticipants.promoteParticipants(chat, participants);
                 return { status: 200 };
             },
             this.id._serialized,
@@ -288,17 +239,13 @@ class GroupChat extends Chat {
     async demoteParticipants(participantIds) {
         return await this.client.pupPage.evaluate(
             async (chatId, participantIds) => {
-                const chatWid = window.Store.WidFactory.createWid(chatId);
-                const chat = await window.Store.Chat.find(chatWid);
+                const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
                 const participants = participantIds
                     .map((p) => {
                         return chat.groupMetadata.participants.get(p);
                     })
                     .filter((p) => Boolean(p));
-                await window.Store.GroupParticipants.demoteParticipants(
-                    chat,
-                    participants
-                );
+                await window.Store.GroupParticipants.demoteParticipants(chat, participants);
                 return { status: 200 };
             },
             this.id._serialized,
@@ -316,13 +263,10 @@ class GroupChat extends Chat {
             async (chatId, subject) => {
                 const chatWid = window.Store.WidFactory.createWid(chatId);
                 try {
-                    await window.Store.GroupUtils.setGroupSubject(
-                        chatWid,
-                        subject
-                    );
+                    await window.Store.GroupUtils.setGroupSubject(chatWid, subject);
                     return true;
                 } catch (err) {
-                    if (err.name === "ServerStatusCodeError") return false;
+                    if (err.name === 'ServerStatusCodeError') return false;
                     throw err;
                 }
             },
@@ -347,15 +291,10 @@ class GroupChat extends Chat {
                 let descId = window.Store.GroupMetadata.get(chatWid).descId;
                 let newId = await window.Store.MsgKey.newId();
                 try {
-                    await window.Store.GroupUtils.setGroupDescription(
-                        chatWid,
-                        description,
-                        newId,
-                        descId
-                    );
+                    await window.Store.GroupUtils.setGroupDescription(chatWid, description, newId, descId);
                     return true;
                 } catch (err) {
-                    if (err.name === "ServerStatusCodeError") return false;
+                    if (err.name === 'ServerStatusCodeError') return false;
                     throw err;
                 }
             },
@@ -378,15 +317,10 @@ class GroupChat extends Chat {
             async (groupId, adminsOnly) => {
                 const chatWid = window.Store.WidFactory.createWid(groupId);
                 try {
-                    const response =
-                        await window.Store.GroupUtils.setGroupMemberAddMode(
-                            chatWid,
-                            "member_add_mode",
-                            adminsOnly ? 0 : 1
-                        );
-                    return response.name === "SetMemberAddModeResponseSuccess";
+                    const response = await window.Store.GroupUtils.setGroupMemberAddMode(chatWid, 'member_add_mode', adminsOnly ? 0 : 1);
+                    return response.name === 'SetMemberAddModeResponseSuccess';
                 } catch (err) {
-                    if (err.name === "SmaxParsingFailure") return false;
+                    if (err.name === 'SmaxParsingFailure') return false;
                     throw err;
                 }
             },
@@ -394,10 +328,7 @@ class GroupChat extends Chat {
             adminsOnly
         );
 
-        success &&
-            (this.groupMetadata.memberAddMode = adminsOnly
-                ? "admin_add"
-                : "all_member_add");
+        success && (this.groupMetadata.memberAddMode = adminsOnly ? 'admin_add' : 'all_member_add');
         return success;
     }
 
@@ -411,14 +342,10 @@ class GroupChat extends Chat {
             async (chatId, adminsOnly) => {
                 const chatWid = window.Store.WidFactory.createWid(chatId);
                 try {
-                    await window.Store.GroupUtils.setGroupProperty(
-                        chatWid,
-                        "announcement",
-                        adminsOnly ? 1 : 0
-                    );
+                    await window.Store.GroupUtils.setGroupProperty(chatWid, 'announcement', adminsOnly ? 1 : 0);
                     return true;
                 } catch (err) {
-                    if (err.name === "ServerStatusCodeError") return false;
+                    if (err.name === 'ServerStatusCodeError') return false;
                     throw err;
                 }
             },
@@ -442,14 +369,10 @@ class GroupChat extends Chat {
             async (chatId, adminsOnly) => {
                 const chatWid = window.Store.WidFactory.createWid(chatId);
                 try {
-                    await window.Store.GroupUtils.setGroupProperty(
-                        chatWid,
-                        "restrict",
-                        adminsOnly ? 1 : 0
-                    );
+                    await window.Store.GroupUtils.setGroupProperty(chatWid, 'restrict', adminsOnly ? 1 : 0);
                     return true;
                 } catch (err) {
-                    if (err.name === "ServerStatusCodeError") return false;
+                    if (err.name === 'ServerStatusCodeError') return false;
                     throw err;
                 }
             },
@@ -500,20 +423,11 @@ class GroupChat extends Chat {
         const codeRes = await this.client.pupPage.evaluate(async (chatId) => {
             const chatWid = window.Store.WidFactory.createWid(chatId);
             try {
-                return window.compareWwebVersions(
-                    window.Debug.VERSION,
-                    ">=",
-                    "2.3000.1020730154"
-                )
-                    ? await window.Store.GroupInvite.fetchMexGroupInviteCode(
-                          chatId
-                      )
-                    : await window.Store.GroupInvite.queryGroupInviteCode(
-                          chatWid,
-                          true
-                      );
+                return window.compareWwebVersions(window.Debug.VERSION, '>=', '2.3000.1020730154')
+                    ? await window.Store.GroupInvite.fetchMexGroupInviteCode(chatId)
+                    : await window.Store.GroupInvite.queryGroupInviteCode(chatWid, true);
             } catch (err) {
-                if (err.name === "ServerStatusCodeError") return undefined;
+                if (err.name === 'ServerStatusCodeError') return undefined;
                 throw err;
             }
         }, this.id._serialized);
@@ -549,9 +463,7 @@ class GroupChat extends Chat {
      * @returns {Promise<Array<GroupMembershipRequest>>} An array of membership requests
      */
     async getGroupMembershipRequests() {
-        return await this.client.getGroupMembershipRequests(
-            this.id._serialized
-        );
+        return await this.client.getGroupMembershipRequests(this.id._serialized);
     }
 
     /**
@@ -575,10 +487,7 @@ class GroupChat extends Chat {
      * @returns {Promise<Array<MembershipRequestActionResult>>} Returns an array of requester IDs whose membership requests were approved and an error for each requester, if any occurred during the operation. If there are no requests, an empty array will be returned
      */
     async approveGroupMembershipRequests(options = {}) {
-        return await this.client.approveGroupMembershipRequests(
-            this.id._serialized,
-            options
-        );
+        return await this.client.approveGroupMembershipRequests(this.id._serialized, options);
     }
 
     /**
@@ -587,10 +496,7 @@ class GroupChat extends Chat {
      * @returns {Promise<Array<MembershipRequestActionResult>>} Returns an array of requester IDs whose membership requests were rejected and an error for each requester, if any occurred during the operation. If there are no requests, an empty array will be returned
      */
     async rejectGroupMembershipRequests(options = {}) {
-        return await this.client.rejectGroupMembershipRequests(
-            this.id._serialized,
-            options
-        );
+        return await this.client.rejectGroupMembershipRequests(this.id._serialized, options);
     }
 
     /**
@@ -599,8 +505,7 @@ class GroupChat extends Chat {
      */
     async leave() {
         await this.client.pupPage.evaluate(async (chatId) => {
-            const chatWid = window.Store.WidFactory.createWid(chatId);
-            const chat = await window.Store.Chat.find(chatWid);
+            const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
             return window.Store.GroupUtils.sendExitGroup(chat);
         }, this.id._serialized);
     }

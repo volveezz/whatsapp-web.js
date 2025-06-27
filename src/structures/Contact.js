@@ -18,7 +18,7 @@ class Contact extends Base {
     constructor(client, data) {
         super(client);
 
-        if(data) this._patch(data);
+        if (data) this._patch(data);
     }
 
     _patch(data) {
@@ -108,7 +108,7 @@ class Contact extends Base {
          * @type {boolean}
          */
         this.isBlocked = data.isBlocked;
-        
+
         return super._patch(data);
     }
 
@@ -127,7 +127,7 @@ class Contact extends Base {
     async getFormattedNumber() {
         return await this.client.getFormattedNumber(this.id._serialized);
     }
-    
+
     /**
      * Returns the contact's countrycode, (1541859685@c.us) => (1)
      * @returns {Promise<string>}
@@ -135,14 +135,14 @@ class Contact extends Base {
     async getCountryCode() {
         return await this.client.getCountryCode(this.id._serialized);
     }
-    
+
     /**
-     * Returns the Chat that corresponds to this Contact. 
+     * Returns the Chat that corresponds to this Contact.
      * Will return null when getting chat for currently logged in user.
      * @returns {Promise<Chat>}
      */
     async getChat() {
-        if(this.isMe) return null;
+        if (this.isMe) return null;
 
         return await this.client.getChatById(this.id._serialized);
     }
@@ -152,11 +152,11 @@ class Contact extends Base {
      * @returns {Promise<boolean>}
      */
     async block() {
-        if(this.isGroup) return false;
+        if (this.isGroup) return false;
 
         await this.client.pupPage.evaluate(async (contactId) => {
             const contact = window.Store.Contact.get(contactId);
-            await window.Store.BlockContact.blockContact({contact});
+            await window.Store.BlockContact.blockContact({ contact });
         }, this.id._serialized);
 
         this.isBlocked = true;
@@ -168,7 +168,7 @@ class Contact extends Base {
      * @returns {Promise<boolean>}
      */
     async unblock() {
-        if(this.isGroup) return false;
+        if (this.isGroup) return false;
 
         await this.client.pupPage.evaluate(async (contactId) => {
             const contact = window.Store.Contact.get(contactId);
@@ -189,8 +189,7 @@ class Contact extends Base {
             return window.Store.StatusUtils.getStatus(wid);
         }, this.id._serialized);
 
-        if (typeof about.status !== 'string')
-            return null;
+        if (typeof about.status !== 'string') return null;
 
         return about.status;
     }
@@ -202,7 +201,6 @@ class Contact extends Base {
     async getCommonGroups() {
         return await this.client.getCommonGroups(this.id._serialized);
     }
-    
 }
 
 module.exports = Contact;

@@ -19,22 +19,24 @@
 
 The library works by launching the WhatsApp Web browser application and managing it using Puppeteer to create an instance of WhatsApp Web, thereby mitigating the risk of being blocked. The WhatsApp API client connects through the WhatsApp Web browser app, accessing its internal functions. This grants you access to nearly all the features available on WhatsApp Web, enabling dynamic handling similar to any other Node.js application.
 
-> [!IMPORTANT] > **It is not guaranteed you will not be blocked by using this method. WhatsApp does not allow bots or unofficial clients on their platform, so this shouldn't be considered totally safe.**
+> [!IMPORTANT]
+> **It is not guaranteed you will not be blocked by using this method. WhatsApp does not allow bots or unofficial clients on their platform, so this shouldn't be considered totally safe.**
 
 ## Links
 
--   [Website][website]
--   [Guide][guide] ([source][guide-source]) _(work in progress)_
--   [Documentation][documentation] ([source][documentation-source])
--   [WWebJS Discord][discord]
--   [GitHub][gitHub]
--   [npm][npm]
+- [Website][website]
+- [Guide][guide] ([source][guide-source]) _(work in progress)_
+- [Documentation][documentation] ([source][documentation-source])
+- [WWebJS Discord][discord]
+- [GitHub][gitHub]
+- [npm][npm]
 
 ## Installation
 
 The module is now available on npm! `npm i whatsapp-web.js`
 
-> [!NOTE] > **Node `v18+` is required.**
+> [!NOTE]
+> **Node `v18+` is required.**
 
 ## QUICK STEPS TO UPGRADE NODE
 
@@ -73,22 +75,22 @@ sudo apt-get install -y nodejs
 ## Example usage
 
 ```js
-const { Client } = require("whatsapp-web.js");
+const { Client } = require('whatsapp-web.js');
 
 const client = new Client();
 
-client.on("qr", (qr) => {
+client.on('qr', (qr) => {
     // Generate and scan this code with your phone
-    console.log("QR RECEIVED", qr);
+    console.log('QR RECEIVED', qr);
 });
 
-client.on("ready", () => {
-    console.log("Client is ready!");
+client.on('ready', () => {
+    console.log('Client is ready!');
 });
 
-client.on("message", (msg) => {
-    if (msg.body == "!ping") {
-        msg.reply("pong");
+client.on('message', (msg) => {
+    if (msg.body == '!ping') {
+        msg.reply('pong');
     }
 });
 
@@ -131,9 +133,9 @@ For further details on saving and restoring sessions, explore the provided [Auth
 | Set user status message                          | ✅                                           |
 | React to messages                                | ✅                                           |
 | Create polls                                     | ✅                                           |
+| Channels                                         | ✅                                           |
 | Vote in polls                                    | 🔜                                           |
 | Communities                                      | 🔜                                           |
-| Channels                                         | 🔜                                           |
 
 Something missing? Make an issue and let us know!
 
@@ -145,9 +147,9 @@ Feel free to open pull requests; we welcome contributions! However, for signific
 
 You can support the maintainer of this project through the links below
 
--   [Support via GitHub Sponsors][gitHub-sponsors]
--   [Support via PayPal][support-payPal]
--   [Sign up for DigitalOcean][digitalocean] and get $200 in credit when you sign up (Referral)
+- [Support via GitHub Sponsors][gitHub-sponsors]
+- [Support via PayPal][support-payPal]
+- [Sign up for DigitalOcean][digitalocean] and get $200 in credit when you sign up (Referral)
 
 ## Disclaimer
 
@@ -185,53 +187,3 @@ limitations under the License.
 [digitalocean]: https://m.do.co/c/73f906a36ed4
 [contributing]: https://github.com/pedroslopez/whatsapp-web.js/blob/main/CODE_OF_CONDUCT.md
 [whatsapp]: https://whatsapp.com
-
-# Link Preview Image Extraction
-
-This repository contains enhancements to the WhatsApp Web.js library to reliably extract link preview thumbnails from messages, particularly for the `message_create` event.
-
-## Changes Made
-
-1. **Enhanced Message Model**: Modified `getMessageModel` in `src/util/Injected/Utils.js` to capture link preview data including thumbnail URLs when available.
-
-2. **New Helper Methods**:
-
-    - Added `getLinkPreview()` method to Message class to extract link preview data
-    - Added `downloadLinkPreviewThumbnail()` method to download thumbnails as MessageMedia objects
-    - Added `window.WWebJS.downloadLinkPreviewThumbnail()` utility function
-
-3. **Documentation**: Added comprehensive documentation in `docs/README.md` explaining the new functionality.
-
-## Usage Example
-
-```javascript
-// Extract link preview data from any message
-client.on("message_create", async (msg) => {
-    const linkPreview = msg.getLinkPreview();
-
-    if (linkPreview && linkPreview.thumbnailUrl) {
-        console.log(`Found thumbnail URL: ${linkPreview.thumbnailUrl}`);
-
-        // Download the thumbnail
-        const thumbnail = await msg.downloadLinkPreviewThumbnail();
-        if (thumbnail) {
-            // You can send this thumbnail to another chat
-            const chat = await msg.getChat();
-            chat.sendMessage(thumbnail, { caption: "Link thumbnail" });
-
-            // Or save it to a file
-            thumbnail.toFilePath(`./link-thumbnail-${Date.now()}.jpg`);
-        }
-    }
-});
-```
-
-## Why This Works
-
-The solution captures link preview data directly from the internal WhatsApp Web message object by enhancing the serialization process in `getMessageModel`. This ensures that all link preview data, including thumbnail URLs, is reliably captured and accessible through the client API.
-
-The implementation works for both incoming messages and messages sent by the user (captured through the `message_create` event).
-
-## See Documentation
-
-For more detailed information, please check `docs/README.md`.

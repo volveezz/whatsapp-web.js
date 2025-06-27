@@ -1,8 +1,8 @@
-"use strict";
+'use strict';
 
-const path = require("path");
-const fs = require("fs");
-const BaseAuthStrategy = require("./BaseAuthStrategy");
+const path = require('path');
+const fs = require('fs');
+const BaseAuthStrategy = require('./BaseAuthStrategy');
 
 /**
  * Local directory-based authentication
@@ -17,30 +17,21 @@ class LocalAuth extends BaseAuthStrategy {
 
         const idRegex = /^[-_\w]+$/i;
         if (clientId && !idRegex.test(clientId)) {
-            throw new Error(
-                "Invalid clientId. Only alphanumeric characters, underscores and hyphens are allowed."
-            );
+            throw new Error('Invalid clientId. Only alphanumeric characters, underscores and hyphens are allowed.');
         }
 
-        this.dataPath = path.resolve(dataPath || "./.wwebjs_auth/");
+        this.dataPath = path.resolve(dataPath || './.wwebjs_auth/');
         this.clientId = clientId;
         this.rmMaxRetries = rmMaxRetries ?? 4;
     }
 
     async beforeBrowserInitialized() {
         const puppeteerOpts = this.client.options.puppeteer;
-        const sessionDirName = this.clientId
-            ? `session-${this.clientId}`
-            : "session";
+        const sessionDirName = this.clientId ? `session-${this.clientId}` : 'session';
         const dirPath = path.join(this.dataPath, sessionDirName);
 
-        if (
-            puppeteerOpts.userDataDir &&
-            puppeteerOpts.userDataDir !== dirPath
-        ) {
-            throw new Error(
-                "LocalAuth is not compatible with a user-supplied userDataDir."
-            );
+        if (puppeteerOpts.userDataDir && puppeteerOpts.userDataDir !== dirPath) {
+            throw new Error('LocalAuth is not compatible with a user-supplied userDataDir.');
         }
 
         fs.mkdirSync(dirPath, { recursive: true });
@@ -55,15 +46,9 @@ class LocalAuth extends BaseAuthStrategy {
 
     async logout() {
         if (this.userDataDir) {
-            await fs.promises
-                .rm(this.userDataDir, {
-                    recursive: true,
-                    force: true,
-                    maxRetries: this.rmMaxRetries,
-                })
-                .catch((e) => {
-                    throw new Error(e);
-                });
+            await fs.promises.rm(this.userDataDir, { recursive: true, force: true, maxRetries: this.rmMaxRetries }).catch((e) => {
+                throw new Error(e);
+            });
         }
     }
 }

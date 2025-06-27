@@ -29,7 +29,7 @@ class RemoteWebCache extends WebCache {
         }
 
         if (this.strict) throw new VersionResolveError(`Couldn't load version ${version} from the archive`);
-        return null;         
+        return null;
     }
 
     async persist() {

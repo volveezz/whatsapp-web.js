@@ -1,7 +1,7 @@
-"use strict";
+'use strict';
 
-const Base = require("./Base");
-const Message = require("./Message");
+const Base = require('./Base');
+const Message = require('./Message');
 
 /**
  * Represents a Chat on WhatsApp
@@ -79,9 +79,7 @@ class Chat extends Base {
          * Last message fo chat
          * @type {Message}
          */
-        this.lastMessage = data.lastMessage
-            ? new Message(this.client, data.lastMessage)
-            : undefined;
+        this.lastMessage = data.lastMessage ? new Message(this.client, data.lastMessage) : undefined;
 
         return super._patch(data);
     }
@@ -97,7 +95,7 @@ class Chat extends Base {
     }
 
     /**
-     * Set the message as seen
+     * Sets the chat as seen
      * @returns {Promise<Boolean>} result
      */
     async sendSeen() {
@@ -106,7 +104,7 @@ class Chat extends Base {
 
     /**
      * Clears all messages from the chat
-     * @returns {Promise<Boolean>} result
+     * @returns {Promise<boolean>} result
      */
     async clearMessages() {
         return this.client.pupPage.evaluate((chatId) => {
@@ -156,17 +154,25 @@ class Chat extends Base {
 
     /**
      * Mutes this chat forever, unless a date is specified
-     * @param {?Date} unmuteDate Date at which the Chat will be unmuted, leave as is to mute forever
+     * @param {?Date} unmuteDate Date when the chat will be unmuted, don't provide a value to mute forever
+     * @returns {Promise<{isMuted: boolean, muteExpiration: number}>}
      */
     async mute(unmuteDate) {
-        return this.client.muteChat(this.id._serialized, unmuteDate);
+        const result = await this.client.muteChat(this.id._serialized, unmuteDate);
+        this.isMuted = result.isMuted;
+        this.muteExpiration = result.muteExpiration;
+        return result;
     }
 
     /**
      * Unmutes this chat
+     * @returns {Promise<{isMuted: boolean, muteExpiration: number}>}
      */
     async unmute() {
-        return this.client.unmuteChat(this.id._serialized);
+        const result = await this.client.unmuteChat(this.id._serialized);
+        this.isMuted = result.isMuted;
+        this.muteExpiration = result.muteExpiration;
+        return result;
     }
 
     /**
@@ -190,25 +196,18 @@ class Chat extends Base {
                     if (m.isNotification) {
                         return false; // dont include notification messages
                     }
-                    if (
-                        searchOptions &&
-                        searchOptions.fromMe !== undefined &&
-                        m.id.fromMe !== searchOptions.fromMe
-                    ) {
+                    if (searchOptions && searchOptions.fromMe !== undefined && m.id.fromMe !== searchOptions.fromMe) {
                         return false;
                     }
                     return true;
                 };
 
-                const chat = window.Store.Chat.get(chatId);
+                const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
                 let msgs = chat.msgs.getModelsArray().filter(msgFilter);
 
                 if (searchOptions && searchOptions.limit > 0) {
                     while (msgs.length < searchOptions.limit) {
-                        const loadedMessages =
-                            await window.Store.ConversationMsgs.loadEarlierMsgs(
-                                chat
-                            );
+                        const loadedMessages = await window.Store.ConversationMsgs.loadEarlierMsgs(chat);
                         if (!loadedMessages || !loadedMessages.length) break;
                         msgs = [...loadedMessages.filter(msgFilter), ...msgs];
                     }
@@ -233,7 +232,7 @@ class Chat extends Base {
      */
     async sendStateTyping() {
         return this.client.pupPage.evaluate((chatId) => {
-            window.WWebJS.sendChatstate("typing", chatId);
+            window.WWebJS.sendChatstate('typing', chatId);
             return true;
         }, this.id._serialized);
     }
@@ -243,7 +242,7 @@ class Chat extends Base {
      */
     async sendStateRecording() {
         return this.client.pupPage.evaluate((chatId) => {
-            window.WWebJS.sendChatstate("recording", chatId);
+            window.WWebJS.sendChatstate('recording', chatId);
             return true;
         }, this.id._serialized);
     }
@@ -253,7 +252,7 @@ class Chat extends Base {
      */
     async clearState() {
         return this.client.pupPage.evaluate((chatId) => {
-            window.WWebJS.sendChatstate("stop", chatId);
+            window.WWebJS.sendChatstate('stop', chatId);
             return true;
         }, this.id._serialized);
     }

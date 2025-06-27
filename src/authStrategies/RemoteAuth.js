@@ -1,19 +1,19 @@
-"use strict";
+'use strict';
 
 /* Require Optional Dependencies */
 try {
-    var fs = require("fs-extra");
-    var archiver = require("archiver");
-    var tar = require("tar-fs");
+    var fs = require('fs-extra');
+    var archiver = require('archiver');
+    var tar = require('tar-fs');
 } catch {
     fs = undefined;
     archiver = undefined;
     tar = undefined;
 }
 
-const path = require("path");
-const { Events } = require("./../util/Constants");
-const BaseAuthStrategy = require("./BaseAuthStrategy");
+const path = require('path');
+const { Events } = require('./../util/Constants');
+const BaseAuthStrategy = require('./BaseAuthStrategy');
 
 /**
  * Remote-based authentication
@@ -25,59 +25,38 @@ const BaseAuthStrategy = require("./BaseAuthStrategy");
  * @param {number} options.rmMaxRetries - Sets the maximum number of retries for removing the session directory
  */
 class RemoteAuth extends BaseAuthStrategy {
-    constructor({
-        clientId,
-        dataPath,
-        store,
-        backupSyncIntervalMs,
-        rmMaxRetries,
-    } = {}) {
-        if (!fs && !unzipper && !archiver)
+    constructor({ clientId, dataPath, store, backupSyncIntervalMs, rmMaxRetries } = {}) {
+        if (!fs && !archiver)
             throw new Error(
-                "Optional Dependencies [fs-extra, unzipper, archiver] are required to use RemoteAuth. Make sure to run npm install correctly and remove the --no-optional flag"
+                'Optional Dependencies [fs-extra, unzipper, archiver] are required to use RemoteAuth. Make sure to run npm install correctly and remove the --no-optional flag'
             );
         super();
 
         const idRegex = /^[-_\w]+$/i;
         if (clientId && !idRegex.test(clientId)) {
-            throw new Error(
-                "Invalid clientId. Only alphanumeric characters, underscores and hyphens are allowed."
-            );
+            throw new Error('Invalid clientId. Only alphanumeric characters, underscores and hyphens are allowed.');
         }
         if (!backupSyncIntervalMs || backupSyncIntervalMs < 60000) {
-            throw new Error(
-                "Invalid backupSyncIntervalMs. Accepts values starting from 60000ms {1 minute}."
-            );
+            throw new Error('Invalid backupSyncIntervalMs. Accepts values starting from 60000ms {1 minute}.');
         }
-        if (!store) throw new Error("Remote database store is required.");
+        if (!store) throw new Error('Remote database store is required.');
 
         this.store = store;
         this.clientId = clientId;
         this.backupSyncIntervalMs = backupSyncIntervalMs;
-        this.dataPath = path.resolve(dataPath || "./.wwebjs_auth/");
+        this.dataPath = path.resolve(dataPath || './.wwebjs_auth/');
         this.tempDir = `${this.dataPath}/wwebjs_temp_session_${this.clientId}`;
-        this.requiredDirs = [
-            "Default",
-            "IndexedDB",
-            "Local Storage",
-        ]; /* => Required Files & Dirs in WWebJS to restore session */
+        this.requiredDirs = ['Default', 'IndexedDB', 'Local Storage']; /* => Required Files & Dirs in WWebJS to restore session */
         this.rmMaxRetries = rmMaxRetries ?? 4;
     }
 
     async beforeBrowserInitialized() {
         const puppeteerOpts = this.client.options.puppeteer;
-        const sessionDirName = this.clientId
-            ? `RemoteAuth-${this.clientId}`
-            : "RemoteAuth";
+        const sessionDirName = this.clientId ? `RemoteAuth-${this.clientId}` : 'RemoteAuth';
         const dirPath = path.join(this.dataPath, sessionDirName);
 
-        if (
-            puppeteerOpts.userDataDir &&
-            puppeteerOpts.userDataDir !== dirPath
-        ) {
-            throw new Error(
-                "RemoteAuth is not compatible with a user-supplied userDataDir."
-            );
+        if (puppeteerOpts.userDataDir && puppeteerOpts.userDataDir !== dirPath) {
+            throw new Error('RemoteAuth is not compatible with a user-supplied userDataDir.');
         }
 
         this.userDataDir = dirPath;
@@ -120,9 +99,7 @@ class RemoteAuth extends BaseAuthStrategy {
             session: this.sessionName,
         });
         if (!sessionExists) {
-            await this.delay(
-                60000
-            ); /* Initial delay sync required for session to be stable enough to recover */
+            await this.delay(60000); /* Initial delay sync required for session to be stable enough to recover */
             await this.storeRemoteSession({ emit: true });
         }
         var self = this;
@@ -145,8 +122,7 @@ class RemoteAuth extends BaseAuthStrategy {
                     maxRetries: this.rmMaxRetries,
                 })
                 .catch(() => {});
-            if (options && options.emit)
-                this.client.emit(Events.REMOTE_SESSION_SAVED);
+            if (options && options.emit) this.client.emit(Events.REMOTE_SESSION_SAVED);
         }
     }
 
@@ -180,8 +156,7 @@ class RemoteAuth extends BaseAuthStrategy {
         const sessionExists = await this.store.sessionExists({
             session: this.sessionName,
         });
-        if (sessionExists)
-            await this.store.delete({ session: this.sessionName });
+        if (sessionExists) await this.store.delete({ session: this.sessionName });
     }
 
     /**
@@ -193,11 +168,7 @@ class RemoteAuth extends BaseAuthStrategy {
         await this.deleteMetadata();
 
         return new Promise((resolve, reject) => {
-            tar.pack(this.tempDir)
-                .on("error", reject)
-                .pipe(fs.createWriteStream(archivePath))
-                .on("error", reject)
-                .on("close", resolve);
+            tar.pack(this.tempDir).on('error', reject).pipe(fs.createWriteStream(archivePath)).on('error', reject).on('close', resolve);
         });
     }
 
@@ -207,17 +178,14 @@ class RemoteAuth extends BaseAuthStrategy {
      */
     async unCompressSession(compressedSessionPath) {
         await new Promise((resolve, reject) => {
-            fs.createReadStream(compressedSessionPath)
-                .pipe(tar.extract(this.userDataDir))
-                .on("error", reject)
-                .on("finish", resolve);
+            fs.createReadStream(compressedSessionPath).pipe(tar.extract(this.userDataDir)).on('error', reject).on('finish', resolve);
         });
 
         await fs.promises.unlink(compressedSessionPath);
     }
 
     async deleteMetadata() {
-        const sessionDirs = [this.tempDir, path.join(this.tempDir, "Default")];
+        const sessionDirs = [this.tempDir, path.join(this.tempDir, 'Default')];
         for (const dir of sessionDirs) {
             const sessionFiles = await fs.promises.readdir(dir);
             for (const element of sessionFiles) {

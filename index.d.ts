@@ -1,7 +1,7 @@
-import { EventEmitter } from "events";
-import { RequestInit } from "node-fetch";
-import * as puppeteer from "puppeteer";
-import InterfaceController from "./src/util/InterfaceController";
+import { EventEmitter } from 'events';
+import { RequestInit } from 'node-fetch';
+import * as puppeteer from 'puppeteer';
+import InterfaceController from './src/util/InterfaceController';
 
 declare namespace WAWebJS {
     export class Client extends EventEmitter {
@@ -25,10 +25,17 @@ declare namespace WAWebJS {
         /**Accepts an invitation to join a group */
         acceptInvite(inviteCode: string): Promise<string>;
 
+        /** Accepts a channel admin invitation and promotes the current user to a channel admin */
+        acceptChannelAdminInvite(channelId: string): Promise<boolean>;
+
+        /** Revokes a channel admin invitation sent to a user by a channel owner */
+        revokeChannelAdminInvite(channelId: string, userId: string): Promise<boolean>;
+
+        /** Demotes a channel admin to a regular subscriber (can be used also for self-demotion) */
+        demoteChannelAdmin(channelId: string, userId: string): Promise<boolean>;
+
         /** Accepts a private invitation to join a group (v4 invite) */
-        acceptGroupV4Invite: (
-            inviteV4: InviteV4Data
-        ) => Promise<{ status: number }>;
+        acceptGroupV4Invite: (inviteV4: InviteV4Data) => Promise<{ status: number }>;
 
         /**Returns an object with information about the invite code's group */
         getInviteInfo(inviteCode: string): Promise<object>;
@@ -49,6 +56,27 @@ declare namespace WAWebJS {
             options?: CreateGroupOptions
         ): Promise<CreateGroupResult | string>;
 
+        /** Creates a new channel */
+        createChannel(title: string, options?: CreateChannelOptions): Promise<CreateChannelResult | string>;
+
+        /** Deletes the channel you created */
+        deleteChannel(channelId: string): Promise<boolean>;
+
+        /** Subscribe to channel */
+        subscribeToChannel(channelId: string): Promise<boolean>;
+
+        /** Unsubscribe from channel */
+        unsubscribeFromChannel(channelId: string, options?: UnsubscribeOptions): Promise<boolean>;
+
+        /**
+         * Searches for channels based on search criteria, there are some notes:
+         * 1. The method finds only channels you are not subscribed to currently
+         * 2. If you have never been subscribed to a found channel
+         * or you have unsubscribed from it with {@link UnsubscribeOptions.deleteLocalModels} set to 'true',
+         * the lastMessage property of a found channel will be 'null'
+         */
+        searchChannels(searchOptions: SearchChannelsOptions): Promise<Array<Channel> | []>;
+
         /** Closes the client */
         destroy(): Promise<void>;
 
@@ -58,11 +86,17 @@ declare namespace WAWebJS {
         /** Get all blocked contacts by host account */
         getBlockedContacts(): Promise<Contact[]>;
 
-        /** Get chat instance by ID */
+        /** Gets chat or channel instance by ID */
         getChatById(chatId: string): Promise<Chat>;
+
+        /** Gets a {@link Channel} instance by invite code */
+        getChannelByInviteCode(inviteCode: string): Promise<Channel>;
 
         /** Get all current chat instances */
         getChats(): Promise<Chat[]>;
+
+        /** Gets all cached {@link Channel} instances */
+        getChannels(): Promise<Channel[]>;
 
         /** Get contact instance by ID */
         getContactById(contactId: string): Promise<Contact>;
@@ -86,10 +120,7 @@ declare namespace WAWebJS {
         getBroadcasts(): Promise<Broadcast[]>;
 
         /** Change labels in chats  */
-        addOrRemoveLabels(
-            labelIds: Array<number | string>,
-            chatIds: Array<string>
-        ): Promise<void>;
+        addOrRemoveLabels(labelIds: Array<number | string>, chatIds: Array<string>): Promise<void>;
 
         /** Get Label instance by ID */
         getLabelById(labelId: string): Promise<Label>;
@@ -126,7 +157,7 @@ declare namespace WAWebJS {
          * @param chatId ID of the chat that will be muted
          * @param unmuteDate Date when the chat will be unmuted, leave as is to mute forever
          */
-        muteChat(chatId: string, unmuteDate?: Date): Promise<void>;
+        muteChat(chatId: string, unmuteDate?: Date): Promise<{ isMuted: boolean; muteExpiration: number }>;
 
         /**
          * Request authentication via pairing code instead of QR code
@@ -134,10 +165,7 @@ declare namespace WAWebJS {
          * @param showNotification - Show notification to pair on phone number
          * @returns {Promise<string>} - Returns a pairing code in format "ABCDEFGH"
          */
-        requestPairingCode(
-            phoneNumber: string,
-            showNotification = true
-        ): Promise<string>;
+        requestPairingCode(phoneNumber: string, showNotification = true): Promise<string>;
 
         /** Force reset of connection state for the client */
         resetState(): Promise<void>;
@@ -164,20 +192,16 @@ declare namespace WAWebJS {
         ): Promise<object>;
 
         /** Send a message to a specific chatId */
-        sendMessage(
-            chatId: string,
-            content: MessageContent,
-            options?: MessageSendOptions
-        ): Promise<Message>;
+        sendMessage(chatId: string, content: MessageContent, options?: MessageSendOptions): Promise<Message>;
 
         /** Send a reaction to a message */
         sendReaction: (reaction: string, messageId: string) => Promise<void>;
 
+        /** Sends a channel admin invitation to a user, allowing them to become an admin of the channel */
+        sendChannelAdminInvite(chatId: string, channelId: string, options?: { comment?: string }): Promise<boolean>;
+
         /** Searches for messages */
-        searchMessages(
-            query: string,
-            options?: { chatId?: string; page?: number; limit?: number }
-        ): Promise<Message[]>;
+        searchMessages(query: string, options?: { chatId?: string; page?: number; limit?: number }): Promise<Message[]>;
 
         /** Marks the client as online */
         sendPresenceAvailable(): Promise<void>;
@@ -225,6 +249,13 @@ declare namespace WAWebJS {
         setAutoDownloadVideos(flag: boolean): Promise<void>;
 
         /**
+         * Changing the background synchronization setting.
+         * NOTE: this action will take effect after you restart the client.
+         * @param flag true/false on or off
+         */
+        setBackgroundSync(flag: boolean): Promise<void>;
+
+        /**
          * Get user device count by ID
          * Each WaWeb Connection counts as one device, and the phone (if exists) counts as one
          * So for a non-enterprise user with one WaWeb connection it should return "2"
@@ -235,14 +266,22 @@ declare namespace WAWebJS {
         /** Sync history conversation of the Chat */
         syncHistory(chatId: string): Promise<boolean>;
 
-        /** Reinitializes the crypto store and message handling pipeline */
-        reinitializeCryptoStore(): Promise<void>;
+        /** Save new contact to user's addressbook or edit the existing one */
+        saveOrEditAddressbookContact(
+            phoneNumber: string,
+            firstName: string,
+            lastName: string,
+            syncToAddressbook?: boolean
+        ): Promise<ChatId>;
+
+        /** Deletes the contact from user's addressbook */
+        deleteAddressbookContact(honeNumber: string): Promise<void>;
 
         /** Changes and returns the archive state of the Chat */
         unarchiveChat(chatId: string): Promise<boolean>;
 
         /** Unmutes the Chat */
-        unmuteChat(chatId: string): Promise<void>;
+        unmuteChat(chatId: string): Promise<{ isMuted: boolean; muteExpiration: number }>;
 
         /** Sets the current user's profile picture */
         setProfilePicture(media: MessageMedia): Promise<boolean>;
@@ -251,31 +290,35 @@ declare namespace WAWebJS {
         deleteProfilePicture(): Promise<boolean>;
 
         /** Gets an array of membership requests */
-        getGroupMembershipRequests: (
-            groupId: string
-        ) => Promise<Array<GroupMembershipRequest>>;
+        getGroupMembershipRequests(groupId: string): Promise<Array<GroupMembershipRequest>>;
 
         /** Approves membership requests if any */
-        approveGroupMembershipRequests: (
+        approveGroupMembershipRequests(
             groupId: string,
             options: MembershipRequestActionOptions
-        ) => Promise<Array<MembershipRequestActionResult>>;
+        ): Promise<Array<MembershipRequestActionResult>>;
 
         /** Rejects membership requests if any */
-        rejectGroupMembershipRequests: (
+        rejectGroupMembershipRequests(
             groupId: string,
             options: MembershipRequestActionOptions
-        ) => Promise<Array<MembershipRequestActionResult>>;
+        ): Promise<Array<MembershipRequestActionResult>>;
+
+        /**
+         * Transfers a channel ownership to another user.
+         * Note: the user you are transferring the channel ownership to must be a channel admin.
+         */
+        transferChannelOwnership(channelId: string, newOwnerId: string, options?: TransferChannelOwnershipOptions): Promise<boolean>;
 
         /** Generic event */
         on(event: string, listener: (...args: any) => void): this;
 
         /** Emitted when there has been an error while trying to restore an existing session */
-        on(event: "auth_failure", listener: (message: string) => void): this;
+        on(event: 'auth_failure', listener: (message: string) => void): this;
 
         /** Emitted when authentication is successful */
         on(
-            event: "authenticated",
+            event: 'authenticated',
             listener: (
                 /**
                  * Object containing session information, when using LegacySessionAuth. Can be used to restore the session
@@ -288,14 +331,11 @@ declare namespace WAWebJS {
          * Emitted when the battery percentage for the attached device changes
          * @deprecated
          */
-        on(
-            event: "change_battery",
-            listener: (batteryInfo: BatteryInfo) => void
-        ): this;
+        on(event: 'change_battery', listener: (batteryInfo: BatteryInfo) => void): this;
 
         /** Emitted when the connection state changes */
         on(
-            event: "change_state",
+            event: 'change_state',
             listener: (
                 /** the new connection state */
                 state: WAState
@@ -304,16 +344,16 @@ declare namespace WAWebJS {
 
         /** Emitted when the client has been disconnected */
         on(
-            event: "disconnected",
+            event: 'disconnected',
             listener: (
                 /** reason that caused the disconnect */
-                reason: WAState | "LOGOUT"
+                reason: WAState | 'LOGOUT'
             ) => void
         ): this;
 
         /** Emitted when a user joins the chat via invite link or is added by an admin */
         on(
-            event: "group_join",
+            event: 'group_join',
             listener: (
                 /** GroupNotification with more information about the action */
                 notification: GroupNotification
@@ -322,7 +362,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a user leaves the chat or is removed by an admin */
         on(
-            event: "group_leave",
+            event: 'group_leave',
             listener: (
                 /** GroupNotification with more information about the action */
                 notification: GroupNotification
@@ -331,7 +371,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a current user is promoted to an admin or demoted to a regular user */
         on(
-            event: "group_admin_changed",
+            event: 'group_admin_changed',
             listener: (
                 /** GroupNotification with more information about the action */
                 notification: GroupNotification
@@ -343,7 +383,7 @@ declare namespace WAWebJS {
          * that has the membership approval mode turned on
          */
         on(
-            event: "group_membership_request",
+            event: 'group_membership_request',
             listener: (
                 /** GroupNotification with more information about the action */
                 notification: GroupNotification
@@ -352,7 +392,7 @@ declare namespace WAWebJS {
 
         /** Emitted when group settings are updated, such as subject, description or picture */
         on(
-            event: "group_update",
+            event: 'group_update',
             listener: (
                 /** GroupNotification with more information about the action */
                 notification: GroupNotification
@@ -361,7 +401,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a contact or a group participant changed their phone number. */
         on(
-            event: "contact_changed",
+            event: 'contact_changed',
             listener: (
                 /** Message with more information about the event. */
                 message: Message,
@@ -376,7 +416,7 @@ declare namespace WAWebJS {
 
         /** Emitted when media has been uploaded for a message sent by the client */
         on(
-            event: "media_uploaded",
+            event: 'media_uploaded',
             listener: (
                 /** The message with media that was uploaded */
                 message: Message
@@ -385,7 +425,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a new message is received */
         on(
-            event: "message",
+            event: 'message',
             listener: (
                 /** The message that was received */
                 message: Message
@@ -394,7 +434,7 @@ declare namespace WAWebJS {
 
         /** Emitted when an ack event occurrs on message type */
         on(
-            event: "message_ack",
+            event: 'message_ack',
             listener: (
                 /** The message that was affected */
                 message: Message,
@@ -405,7 +445,7 @@ declare namespace WAWebJS {
 
         /** Emitted when an ack event occurrs on message type */
         on(
-            event: "message_edit",
+            event: 'message_edit',
             listener: (
                 /** The message that was affected */
                 message: Message,
@@ -418,7 +458,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a chat unread count changes */
         on(
-            event: "unread_count",
+            event: 'unread_count',
             listener: (
                 /** The chat that was affected */
                 chat: Chat
@@ -427,7 +467,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a new message is created, which may include the current user's own messages */
         on(
-            event: "message_create",
+            event: 'message_create',
             listener: (
                 /** The message that was created */
                 message: Message
@@ -436,7 +476,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a new message ciphertext is received  */
         on(
-            event: "message_ciphertext",
+            event: 'message_ciphertext',
             listener: (
                 /** The message that was ciphertext */
                 message: Message
@@ -445,7 +485,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a message is deleted for everyone in the chat */
         on(
-            event: "message_revoke_everyone",
+            event: 'message_revoke_everyone',
             listener: (
                 /** The message that was revoked, in its current state. It will not contain the original message's data */
                 message: Message,
@@ -459,7 +499,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a message is deleted by the current user */
         on(
-            event: "message_revoke_me",
+            event: 'message_revoke_me',
             listener: (
                 /** The message that was revoked */
                 message: Message
@@ -468,7 +508,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a reaction is sent, received, updated or removed */
         on(
-            event: "message_reaction",
+            event: 'message_reaction',
             listener: (
                 /** The reaction object */
                 reaction: Reaction
@@ -477,7 +517,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a chat is removed */
         on(
-            event: "chat_removed",
+            event: 'chat_removed',
             listener: (
                 /** The chat that was removed */
                 chat: Chat
@@ -486,7 +526,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a chat is archived/unarchived */
         on(
-            event: "chat_archived",
+            event: 'chat_archived',
             listener: (
                 /** The chat that was archived/unarchived */
                 chat: Chat,
@@ -498,14 +538,11 @@ declare namespace WAWebJS {
         ): this;
 
         /** Emitted when loading screen is appearing */
-        on(
-            event: "loading_screen",
-            listener: (percent: string, message: string) => void
-        ): this;
+        on(event: 'loading_screen', listener: (percent: string, message: string) => void): this;
 
         /** Emitted when the QR code is received */
         on(
-            event: "qr",
+            event: 'qr',
             listener: (
                 /** qr code string
                  *  @example ```1@9Q8tWf6bnezr8uVGwVCluyRuBOJ3tIglimzI5dHB0vQW2m4DQ0GMlCGf,f1/vGcW4Z3vBa1eDNl3tOjWqLL5DpYTI84DMVkYnQE8=,ZL7YnK2qdPN8vKo2ESxhOQ==``` */
@@ -515,7 +552,7 @@ declare namespace WAWebJS {
 
         /** Emitted when a call is received */
         on(
-            event: "call",
+            event: 'call',
             listener: (
                 /** The call that started */
                 call: Call
@@ -523,16 +560,16 @@ declare namespace WAWebJS {
         ): this;
 
         /** Emitted when the client has initialized and is ready to receive messages */
-        on(event: "ready", listener: () => void): this;
+        on(event: 'ready', listener: () => void): this;
 
         /** Emitted when the RemoteAuth session is saved successfully on the external Database */
-        on(event: "remote_session_saved", listener: () => void): this;
+        on(event: 'remote_session_saved', listener: () => void): this;
 
         /**
          * Emitted when some poll option is selected or deselected,
          * shows a user's current selected option(s) on the poll
          */
-        on(event: "vote_update", listener: (vote: PollVote) => void): this;
+        on(event: 'vote_update', listener: (vote: PollVote) => void): this;
     }
 
     /** Current connection information */
@@ -604,33 +641,28 @@ declare namespace WAWebJS {
          * @default 'ffmpeg' */
         ffmpegPath?: string;
         /** Object with proxy autentication requirements @default: undefined */
-        proxyAuthentication?:
-            | { username: string; password: string }
-            | undefined;
+        proxyAuthentication?: { username: string; password: string } | undefined;
         /** Path to save downloaded files */
         downloadPath?: string;
     }
 
     export interface LocalWebCacheOptions {
-        type: "local";
+        type: 'local';
         path?: string;
         strict?: boolean;
     }
 
     export interface RemoteWebCacheOptions {
-        type: "remote";
+        type: 'remote';
         remotePath: string;
         strict?: boolean;
     }
 
     export interface NoWebCacheOptions {
-        type: "none";
+        type: 'none';
     }
 
-    export type WebCacheOptions =
-        | NoWebCacheOptions
-        | LocalWebCacheOptions
-        | RemoteWebCacheOptions;
+    export type WebCacheOptions = NoWebCacheOptions | LocalWebCacheOptions | RemoteWebCacheOptions;
 
     /**
      * Base class which all authentication strategies extend
@@ -663,11 +695,7 @@ declare namespace WAWebJS {
     export class LocalAuth extends AuthStrategy {
         public clientId?: string;
         public dataPath?: string;
-        constructor(options?: {
-            clientId?: string;
-            dataPath?: string;
-            rmMaxRetries?: number;
-        });
+        constructor(options?: { clientId?: string; dataPath?: string; rmMaxRetries?: number });
     }
 
     /**
@@ -676,28 +704,17 @@ declare namespace WAWebJS {
     export class RemoteAuth extends AuthStrategy {
         public clientId?: string;
         public dataPath?: string;
-        constructor(options?: {
-            store: Store;
-            clientId?: string;
-            dataPath?: string;
-            backupSyncIntervalMs: number;
-            rmMaxRetries?: number;
-        });
+        constructor(options?: { store: Store; clientId?: string; dataPath?: string; backupSyncIntervalMs: number; rmMaxRetries?: number });
     }
 
     /**
      * Remote store interface
      */
     export interface Store {
-        sessionExists: (options: {
-            session: string;
-        }) => Promise<boolean> | boolean;
+        sessionExists: (options: { session: string }) => Promise<boolean> | boolean;
         delete: (options: { session: string }) => Promise<any> | any;
         save: (options: { session: string }) => Promise<any> | any;
-        extract: (options: {
-            session: string;
-            path: string;
-        }) => Promise<any> | any;
+        extract: (options: { session: string; path: string }) => Promise<any> | any;
     }
 
     /**
@@ -705,10 +722,7 @@ declare namespace WAWebJS {
      * Not compatible with multi-device accounts.
      */
     export class LegacySessionAuth extends AuthStrategy {
-        constructor(options?: {
-            session?: ClientSession;
-            restartOnAuthFail?: boolean;
-        });
+        constructor(options?: { session?: ClientSession; restartOnAuthFail?: boolean });
     }
 
     /**
@@ -774,6 +788,46 @@ declare namespace WAWebJS {
         };
     }
 
+    /** An object that handles options for channel creation */
+    export interface CreateChannelOptions {
+        /** The channel description */
+        description?: string;
+        /** The channel profile picture */
+        picture?: MessageMedia;
+    }
+
+    /** An object that handles the result for createGroup method */
+    export interface CreateChannelResult {
+        /** A channel title */
+        title: string;
+        /** An object that handles the newly created channel ID */
+        nid: ChatId;
+        /** The channel invite link, starts with 'https://whatsapp.com/channel/' */
+        inviteLink: string;
+        /** The timestamp the channel was created at */
+        createdAtTs: number;
+    }
+
+    /** Options for unsubscribe from a channel */
+    export interface UnsubscribeOptions {
+        /**
+         * If true, after an unsubscription, it will completely remove a channel from the channel collection
+         * making it seem like the current user have never interacted with it.
+         * Otherwise it will only remove a channel from the list of channels the current user is subscribed to
+         * and will set the membership type for that channel to GUEST
+         */
+        deleteLocalModels?: boolean;
+    }
+
+    /** Options for searching for channels */
+    export interface SearchChannelsOptions {
+        searchText?: string;
+        countryCodes?: string[];
+        skipSubscribedNewsletters?: boolean;
+        view?: number;
+        limit?: number;
+    }
+
     export interface GroupNotification {
         /** ContactId for the user that produced the GroupNotification */
         author: string;
@@ -798,10 +852,7 @@ declare namespace WAWebJS {
         /** Returns the Contacts affected by this GroupNotification */
         getRecipients: () => Promise<Contact[]>;
         /** Sends a message to the same chat this GroupNotification was produced in */
-        reply: (
-            content: MessageContent,
-            options?: MessageSendOptions
-        ) => Promise<Message>;
+        reply: (content: MessageContent, options?: MessageSendOptions) => Promise<Message>;
     }
 
     /** whatsapp web url */
@@ -812,55 +863,51 @@ declare namespace WAWebJS {
 
     /** Chat types */
     export enum ChatTypes {
-        SOLO = "solo",
-        GROUP = "group",
-        UNKNOWN = "unknown",
+        SOLO = 'solo',
+        GROUP = 'group',
+        UNKNOWN = 'unknown',
     }
 
     /** Events that can be emitted by the client */
     export enum Events {
-        AUTHENTICATED = "authenticated",
-        AUTHENTICATION_FAILURE = "auth_failure",
-        READY = "ready",
-        CHAT_REMOVED = "chat_removed",
-        CHAT_ARCHIVED = "chat_archived",
-        MESSAGE_RECEIVED = "message",
-        MESSAGE_CIPHERTEXT = "message_ciphertext",
-        MESSAGE_CREATE = "message_create",
-        MESSAGE_REVOKED_EVERYONE = "message_revoke_everyone",
-        MESSAGE_REVOKED_ME = "message_revoke_me",
-        MESSAGE_ACK = "message_ack",
-        MESSAGE_EDIT = "message_edit",
-        UNREAD_COUNT = "unread_count",
-        MESSAGE_REACTION = "message_reaction",
-        MEDIA_UPLOADED = "media_uploaded",
-        CONTACT_CHANGED = "contact_changed",
-        GROUP_JOIN = "group_join",
-        GROUP_LEAVE = "group_leave",
-        GROUP_ADMIN_CHANGED = "group_admin_changed",
-        GROUP_MEMBERSHIP_REQUEST = "group_membership_request",
-        GROUP_UPDATE = "group_update",
-        QR_RECEIVED = "qr",
-        LOADING_SCREEN = "loading_screen",
-        DISCONNECTED = "disconnected",
-        STATE_CHANGED = "change_state",
-        BATTERY_CHANGED = "change_battery",
-        INCOMING_CALL = "call",
-        REMOTE_SESSION_SAVED = "remote_session_saved",
-        VOTE_UPDATE = "vote_update",
+        AUTHENTICATED = 'authenticated',
+        AUTHENTICATION_FAILURE = 'auth_failure',
+        READY = 'ready',
+        MESSAGE_RECEIVED = 'message',
+        MESSAGE_CIPHERTEXT = 'message_ciphertext',
+        MESSAGE_CREATE = 'message_create',
+        MESSAGE_REVOKED_EVERYONE = 'message_revoke_everyone',
+        MESSAGE_REVOKED_ME = 'message_revoke_me',
+        MESSAGE_ACK = 'message_ack',
+        MESSAGE_EDIT = 'message_edit',
+        MEDIA_UPLOADED = 'media_uploaded',
+        CONTACT_CHANGED = 'contact_changed',
+        GROUP_JOIN = 'group_join',
+        GROUP_LEAVE = 'group_leave',
+        GROUP_ADMIN_CHANGED = 'group_admin_changed',
+        GROUP_MEMBERSHIP_REQUEST = 'group_membership_request',
+        GROUP_UPDATE = 'group_update',
+        QR_RECEIVED = 'qr',
+        LOADING_SCREEN = 'loading_screen',
+        DISCONNECTED = 'disconnected',
+        STATE_CHANGED = 'change_state',
+        BATTERY_CHANGED = 'change_battery',
+        REMOTE_SESSION_SAVED = 'remote_session_saved',
+        INCOMING_CALL = 'call',
+        MESSAGE_REACTION = 'message_reaction',
     }
 
     /** Group notification types */
     export enum GroupNotificationTypes {
-        ADD = "add",
-        INVITE = "invite",
-        REMOVE = "remove",
-        LEAVE = "leave",
-        SUBJECT = "subject",
-        DESCRIPTION = "description",
-        PICTURE = "picture",
-        ANNOUNCE = "announce",
-        RESTRICT = "restrict",
+        ADD = 'add',
+        INVITE = 'invite',
+        REMOVE = 'remove',
+        LEAVE = 'leave',
+        SUBJECT = 'subject',
+        DESCRIPTION = 'description',
+        PICTURE = 'picture',
+        ANNOUNCE = 'announce',
+        RESTRICT = 'restrict',
     }
 
     /** Message ACK */
@@ -875,42 +922,42 @@ declare namespace WAWebJS {
 
     /** Message types */
     export enum MessageTypes {
-        TEXT = "chat",
-        AUDIO = "audio",
-        VOICE = "ptt",
-        IMAGE = "image",
-        VIDEO = "video",
-        DOCUMENT = "document",
-        STICKER = "sticker",
-        LOCATION = "location",
-        CONTACT_CARD = "vcard",
-        CONTACT_CARD_MULTI = "multi_vcard",
-        REVOKED = "revoked",
-        ORDER = "order",
-        PRODUCT = "product",
-        PAYMENT = "payment",
-        UNKNOWN = "unknown",
-        GROUP_INVITE = "groups_v4_invite",
-        LIST = "list",
-        LIST_RESPONSE = "list_response",
-        BUTTONS_RESPONSE = "buttons_response",
-        BROADCAST_NOTIFICATION = "broadcast_notification",
-        CALL_LOG = "call_log",
-        CIPHERTEXT = "ciphertext",
-        DEBUG = "debug",
-        E2E_NOTIFICATION = "e2e_notification",
-        GP2 = "gp2",
-        GROUP_NOTIFICATION = "group_notification",
-        HSM = "hsm",
-        INTERACTIVE = "interactive",
-        NATIVE_FLOW = "native_flow",
-        NOTIFICATION = "notification",
-        NOTIFICATION_TEMPLATE = "notification_template",
-        OVERSIZED = "oversized",
-        PROTOCOL = "protocol",
-        REACTION = "reaction",
-        TEMPLATE_BUTTON_REPLY = "template_button_reply",
-        POLL_CREATION = "poll_creation",
+        TEXT = 'chat',
+        AUDIO = 'audio',
+        VOICE = 'ptt',
+        IMAGE = 'image',
+        VIDEO = 'video',
+        DOCUMENT = 'document',
+        STICKER = 'sticker',
+        LOCATION = 'location',
+        CONTACT_CARD = 'vcard',
+        CONTACT_CARD_MULTI = 'multi_vcard',
+        REVOKED = 'revoked',
+        ORDER = 'order',
+        PRODUCT = 'product',
+        PAYMENT = 'payment',
+        UNKNOWN = 'unknown',
+        GROUP_INVITE = 'groups_v4_invite',
+        LIST = 'list',
+        LIST_RESPONSE = 'list_response',
+        BUTTONS_RESPONSE = 'buttons_response',
+        BROADCAST_NOTIFICATION = 'broadcast_notification',
+        CALL_LOG = 'call_log',
+        CIPHERTEXT = 'ciphertext',
+        DEBUG = 'debug',
+        E2E_NOTIFICATION = 'e2e_notification',
+        GP2 = 'gp2',
+        GROUP_NOTIFICATION = 'group_notification',
+        HSM = 'hsm',
+        INTERACTIVE = 'interactive',
+        NATIVE_FLOW = 'native_flow',
+        NOTIFICATION = 'notification',
+        NOTIFICATION_TEMPLATE = 'notification_template',
+        OVERSIZED = 'oversized',
+        PROTOCOL = 'protocol',
+        REACTION = 'reaction',
+        TEMPLATE_BUTTON_REPLY = 'template_button_reply',
+        POLL_CREATION = 'poll_creation',
     }
 
     /** Client status */
@@ -922,18 +969,18 @@ declare namespace WAWebJS {
 
     /** WhatsApp state */
     export enum WAState {
-        CONFLICT = "CONFLICT",
-        CONNECTED = "CONNECTED",
-        DEPRECATED_VERSION = "DEPRECATED_VERSION",
-        OPENING = "OPENING",
-        PAIRING = "PAIRING",
-        PROXYBLOCK = "PROXYBLOCK",
-        SMB_TOS_BLOCK = "SMB_TOS_BLOCK",
-        TIMEOUT = "TIMEOUT",
-        TOS_BLOCK = "TOS_BLOCK",
-        UNLAUNCHED = "UNLAUNCHED",
-        UNPAIRED = "UNPAIRED",
-        UNPAIRED_IDLE = "UNPAIRED_IDLE",
+        CONFLICT = 'CONFLICT',
+        CONNECTED = 'CONNECTED',
+        DEPRECATED_VERSION = 'DEPRECATED_VERSION',
+        OPENING = 'OPENING',
+        PAIRING = 'PAIRING',
+        PROXYBLOCK = 'PROXYBLOCK',
+        SMB_TOS_BLOCK = 'SMB_TOS_BLOCK',
+        TIMEOUT = 'TIMEOUT',
+        TOS_BLOCK = 'TOS_BLOCK',
+        UNLAUNCHED = 'UNLAUNCHED',
+        UNPAIRED = 'UNPAIRED',
+        UNPAIRED_IDLE = 'UNPAIRED_IDLE',
     }
 
     export type MessageInfo = {
@@ -1032,15 +1079,11 @@ declare namespace WAWebJS {
         /** MediaKey that represents the sticker 'ID' */
         mediaKey?: string;
         /** Indicates the mentions in the message body. */
-        mentionedIds: ChatId[];
+        mentionedIds: string[];
         /** Indicates whether there are group mentions in the message body */
         groupMentions: {
             groupSubject: string;
-            groupJid: {
-                server: string;
-                user: string;
-                _serialized: string;
-            };
+            groupJid: string;
         }[];
         /** Unix timestamp for when the message was created */
         timestamp: number;
@@ -1092,7 +1135,7 @@ declare namespace WAWebJS {
         /** Accept the Group V4 Invite in message */
         acceptGroupV4Invite: () => Promise<{ status: number }>;
         /** Deletes the message from the chat */
-        delete: (everyone?: boolean) => Promise<void>;
+        delete: (everyone?: boolean, clearMedia?: boolean) => Promise<void>;
         /** Downloads and returns the attached message media */
         downloadMedia: () => Promise<MessageMedia>;
         /** Downloads and saves the attached message media */
@@ -1112,11 +1155,7 @@ declare namespace WAWebJS {
          * If chatId is specified, it will be sent through the specified Chat.
          * If not, it will send the message in the same Chat as the original message was sent.
          */
-        reply: (
-            content: MessageContent,
-            chatId?: string,
-            options?: MessageSendOptions
-        ) => Promise<Message>;
+        reply: (content: MessageContent, chatId?: string, options?: MessageSendOptions) => Promise<Message>;
         /** React to this message with an emoji*/
         react: (reaction: string) => Promise<void>;
         /**
@@ -1146,10 +1185,7 @@ declare namespace WAWebJS {
          */
         getReactions: () => Promise<ReactionList[]>;
         /** Edits the current message */
-        edit: (
-            content: MessageContent,
-            options?: MessageEditOptions
-        ) => Promise<Message | null>;
+        edit: (content: MessageContent, options?: MessageEditOptions) => Promise<Message | null>;
         /**
          * Returns link preview data from a message
          * @returns {Object|null} Link preview data or null if no link preview
@@ -1192,13 +1228,12 @@ declare namespace WAWebJS {
     export class Location {
         latitude: string;
         longitude: string;
-        options?: LocationSendOptions;
+        name?: string;
+        address?: string;
+        url?: string;
+        description?: string;
 
-        constructor(
-            latitude: number,
-            longitude: number,
-            options?: LocationSendOptions
-        );
+        constructor(latitude: number, longitude: number, options?: LocationSendOptions);
     }
 
     /** Poll send options */
@@ -1221,11 +1256,7 @@ declare namespace WAWebJS {
         }>;
         options: PollSendOptions;
 
-        constructor(
-            pollName: string,
-            pollOptions: Array<string>,
-            options?: PollSendOptions
-        );
+        constructor(pollName: string, pollOptions: Array<string>, options?: PollSendOptions);
     }
 
     /** Represents a Poll Vote on WhatsApp */
@@ -1302,6 +1333,8 @@ declare namespace WAWebJS {
         sendMediaAsSticker?: boolean;
         /** Send media as document */
         sendMediaAsDocument?: boolean;
+        /** Send media as quality HD */
+        sendMediaAsHd?: boolean;
         /** Send photo/video as a view once message */
         isViewOnce?: boolean;
         /** Automatically parse vCards and send them as contacts */
@@ -1333,6 +1366,9 @@ declare namespace WAWebJS {
         stickerAuthor?: string;
         /** Sticker categories, if sendMediaAsSticker is true */
         stickerCategories?: string[];
+        /** Should the bot send a quoted message without the quoted message if it fails to get the quote?
+         * @default true (enabled) */
+        ignoreQuoteErrors?: boolean;
     }
 
     /** Options for editing a message */
@@ -1369,33 +1405,16 @@ declare namespace WAWebJS {
          * @param {?string} filename Document file name. Value can be null
          * @param {?number} filesize Document file size in bytes. Value can be null.
          */
-        constructor(
-            mimetype: string,
-            data: string,
-            filename?: string | null,
-            filesize?: number | null
-        );
+        constructor(mimetype: string, data: string, filename?: string | null, filesize?: number | null);
 
         /** Creates a MessageMedia instance from a local file path */
         static fromFilePath: (filePath: string) => MessageMedia;
 
         /** Creates a MessageMedia instance from a URL */
-        static fromUrl: (
-            url: string,
-            options?: MediaFromURLOptions
-        ) => Promise<MessageMedia>;
+        static fromUrl: (url: string, options?: MediaFromURLOptions) => Promise<MessageMedia>;
     }
 
-    export type MessageContent =
-        | string
-        | object
-        | MessageMedia
-        | Location
-        | Poll
-        | Contact
-        | Contact[]
-        | List
-        | Buttons;
+    export type MessageContent = string | object | MessageMedia | Location | Poll | Contact | Contact[] | List | Buttons;
 
     /**
      * Represents a Contact on WhatsApp
@@ -1633,18 +1652,13 @@ declare namespace WAWebJS {
         /** Deletes the chat */
         delete: () => Promise<boolean>;
         /** Loads chat messages, sorted from earliest to latest. */
-        fetchMessages: (
-            searchOptions: MessageSearchOptions
-        ) => Promise<Message[]>;
+        fetchMessages: (searchOptions: MessageSearchOptions) => Promise<Message[]>;
         /** Mutes this chat forever, unless a date is specified */
-        mute: (unmuteDate?: Date) => Promise<void>;
+        mute: (unmuteDate?: Date) => Promise<{ isMuted: boolean; muteExpiration: number }>;
         /** Send a message to this chat */
-        sendMessage: (
-            content: MessageContent,
-            options?: MessageSendOptions
-        ) => Promise<Message>;
-        /** Set the message as seen */
-        sendSeen: () => Promise<void>;
+        sendMessage: (content: MessageContent, options?: MessageSendOptions) => Promise<Message>;
+        /** Sets the chat as seen */
+        sendSeen: () => Promise<boolean>;
         /** Simulate recording audio in chat. This will last for 25 seconds */
         sendStateRecording: () => Promise<void>;
         /** Simulate typing in chat. This will last for 25 seconds. */
@@ -1652,7 +1666,7 @@ declare namespace WAWebJS {
         /** un-archives this chat */
         unarchive: () => Promise<void>;
         /** Unmutes this chat */
-        unmute: () => Promise<void>;
+        unmute: () => Promise<{ isMuted: boolean; muteExpiration: number }>;
         /** Returns the Contact that corresponds to this Chat. */
         getContact: () => Promise<Contact>;
         /** Marks this Chat as unread */
@@ -1663,6 +1677,99 @@ declare namespace WAWebJS {
         changeLabels: (labelIds: Array<string | number>) => Promise<void>;
         /** Sync history conversation of the Chat */
         syncHistory: () => Promise<boolean>;
+    }
+
+    export interface Channel {
+        /** ID that represents the channel */
+        id: {
+            server: string;
+            user: string;
+            _serialized: string;
+        };
+        /** Title of the channel */
+        name: string;
+        /** The channel description */
+        description: string;
+        /** Indicates if it is a Channel */
+        isChannel: boolean;
+        /** Indicates if it is a Group */
+        isGroup: boolean;
+        /** Indicates if the channel is readonly */
+        isReadOnly: boolean;
+        /** Amount of messages unread */
+        unreadCount: number;
+        /** Unix timestamp for when the last activity occurred */
+        timestamp: number;
+        /** Indicates if the channel is muted or not */
+        isMuted: boolean;
+        /** Unix timestamp for when the mute expires */
+        muteExpiration: number;
+        /** Last message in the channel */
+        lastMessage: Message | undefined;
+
+        /** Gets the subscribers of the channel (only those who are in your contact list) */
+        getSubscribers(limit?: number): Promise<{ contact: Contact; role: string }[]>;
+        /** Updates the channel subject */
+        setSubject(newSubject: string): Promise<boolean>;
+        /** Updates the channel description */
+        setDescription(newDescription: string): Promise<boolean>;
+        /** Updates the channel profile picture */
+        setProfilePicture(newProfilePicture: MessageMedia): Promise<boolean>;
+        /**
+         * Updates available reactions to use in the channel
+         *
+         * Valid values for passing to the method are:
+         * 0 for NONE reactions to be avaliable
+         * 1 for BASIC reactions to be available: 👍, ❤️, 😂, 😮, 😢, 🙏
+         * 2 for ALL reactions to be available
+         */
+        setReactionSetting(reactionCode: number): Promise<boolean>;
+        /** Mutes the channel */
+        mute(): Promise<boolean>;
+        /** Unmutes the channel */
+        unmute(): Promise<boolean>;
+        /** Sends a message to this channel */
+        sendMessage(content: string | MessageMedia, options?: MessageSendChannelOptions): Promise<Message>;
+        /** Sets the channel as seen */
+        sendSeen(): Promise<boolean>;
+        /** Sends a channel admin invitation to a user, allowing them to become an admin of the channel */
+        sendChannelAdminInvite(chatId: string, options?: { comment?: string }): Promise<boolean>;
+        /** Accepts a channel admin invitation and promotes the current user to a channel admin */
+        acceptChannelAdminInvite(): Promise<boolean>;
+        /** Revokes a channel admin invitation sent to a user by a channel owner */
+        revokeChannelAdminInvite(userId: string): Promise<boolean>;
+        /** Demotes a channel admin to a regular subscriber (can be used also for self-demotion) */
+        demoteChannelAdmin(userId: string): Promise<boolean>;
+        /** Loads channel messages, sorted from earliest to latest */
+        fetchMessages: (searchOptions: MessageSearchOptions) => Promise<Message[]>;
+        /**
+         * Transfers a channel ownership to another user.
+         * Note: the user you are transferring the channel ownership to must be a channel admin.
+         */
+        transferChannelOwnership(newOwnerId: string, options?: TransferChannelOwnershipOptions): Promise<boolean>;
+        /** Deletes the channel you created */
+        deleteChannel(): Promise<boolean>;
+    }
+
+    /** Options for transferring a channel ownership to another user */
+    export interface TransferChannelOwnershipOptions {
+        /**
+         * If true, after the channel ownership is being transferred to another user,
+         * the current user will be dismissed as a channel admin and will become to a channel subscriber.
+         */
+        shouldDismissSelfAsAdmin?: boolean;
+    }
+
+    /** Options for sending a message */
+    export interface MessageSendChannelOptions {
+        /** Image or videos caption */
+        caption?: string;
+        /** User IDs of user that will be mentioned in the message */
+        mentions?: string[];
+        /** Image or video to be sent */
+        media?: MessageMedia;
+        /** Extra options */
+        extra?: any;
     }
 
     export interface MessageSearchOptions {
@@ -1715,9 +1822,7 @@ declare namespace WAWebJS {
     };
 
     /** Promotes or demotes participants by IDs to regular users or admins */
-    export type ChangeParticipantsPermissions = (
-        participantIds: Array<string>
-    ) => Promise<{ status: number }>;
+    export type ChangeParticipantsPermissions = (participantIds: Array<string>) => Promise<{ status: number }>;
 
     /** An object that handles the result for addParticipants method */
     export interface AddParticipantsResult {
@@ -1799,9 +1904,7 @@ declare namespace WAWebJS {
             options?: AddParticipantsOptions
         ) => Promise<{ [key: string]: AddParticipantsResult } | string>;
         /** Removes a list of participants by ID to the group */
-        removeParticipants: (
-            participantIds: string[]
-        ) => Promise<{ status: number }>;
+        removeParticipants: (participantIds: string[]) => Promise<{ status: number }>;
         /** Promotes participants by IDs to admins */
         promoteParticipants: ChangeParticipantsPermissions;
         /** Demotes participants by IDs to regular users */
@@ -1831,25 +1934,19 @@ declare namespace WAWebJS {
          * Gets an array of membership requests
          * @returns {Promise<Array<GroupMembershipRequest>>} An array of membership requests
          */
-        getGroupMembershipRequests: () => Promise<
-            Array<GroupMembershipRequest>
-        >;
+        getGroupMembershipRequests: () => Promise<Array<GroupMembershipRequest>>;
         /**
          * Approves membership requests if any
          * @param {MembershipRequestActionOptions} options Options for performing a membership request action
          * @returns {Promise<Array<MembershipRequestActionResult>>} Returns an array of requester IDs whose membership requests were approved and an error for each requester, if any occurred during the operation. If there are no requests, an empty array will be returned
          */
-        approveGroupMembershipRequests: (
-            options: MembershipRequestActionOptions
-        ) => Promise<Array<MembershipRequestActionResult>>;
+        approveGroupMembershipRequests: (options: MembershipRequestActionOptions) => Promise<Array<MembershipRequestActionResult>>;
         /**
          * Rejects membership requests if any
          * @param {MembershipRequestActionOptions} options Options for performing a membership request action
          * @returns {Promise<Array<MembershipRequestActionResult>>} Returns an array of requester IDs whose membership requests were rejected and an error for each requester, if any occurred during the operation. If there are no requests, an empty array will be returned
          */
-        rejectGroupMembershipRequests: (
-            options: MembershipRequestActionOptions
-        ) => Promise<Array<MembershipRequestActionResult>>;
+        rejectGroupMembershipRequests: (options: MembershipRequestActionOptions) => Promise<Array<MembershipRequestActionResult>>;
         /** Gets the invite code for a specific group */
         getInviteCode: () => Promise<string>;
         /** Invalidates the current group invite code and generates a new one */
@@ -2038,32 +2135,17 @@ declare namespace WAWebJS {
         title?: string | null;
         footer?: string | null;
 
-        constructor(
-            body: string,
-            buttonText: string,
-            sections: Array<any>,
-            title?: string | null,
-            footer?: string | null
-        );
+        constructor(body: string, buttonText: string, sections: Array<any>, title?: string | null, footer?: string | null);
     }
 
     /** Message type Buttons */
     export class Buttons {
         body: string | MessageMedia;
-        buttons: Array<{
-            buttonId: string;
-            buttonText: { displayText: string };
-            type: number;
-        }>;
+        buttons: Array<{ buttonId: string; buttonText: { displayText: string }; type: number }>;
         title?: string | null;
         footer?: string | null;
 
-        constructor(
-            body: string,
-            buttons: Array<{ id?: string; body: string }>,
-            title?: string | null,
-            footer?: string | null
-        );
+        constructor(body: string, buttons: Array<{ id?: string; body: string }>, title?: string | null, footer?: string | null);
     }
 
     /** Message type Reaction */
