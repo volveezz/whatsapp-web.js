@@ -412,18 +412,31 @@ class Client extends EventEmitter {
                         await client.attachEventListeners();
                     }
 
-                    if (lastPercent !== 100) {
-                        await new Promise((resolve) =>
-                            setTimeout(resolve, 3000),
-                        );
-                    }
-
                     // Don't emit ready if we've been logged out
                     if (client.lastLoggedOut) {
                         console.log(
                             `[${client.clientId}] [DEBUG] Skipping ready emission in onAppStateHasSyncedEvent - client logged out`,
                         );
                         return;
+                    }
+
+                    if (lastPercent !== null) {
+                        try {
+                            await client.pupPage.waitForFunction(
+                                () => {
+                                    try {
+                                        const p =
+                                            window.AuthStore?.OfflineMessageHandler?.getOfflineDeliveryProgress?.();
+                                        return (
+                                            typeof p === "number" && p >= 100
+                                        );
+                                    } catch (_) {
+                                        return false;
+                                    }
+                                },
+                                { timeout: 15000 },
+                            );
+                        } catch (_) {}
                     }
 
                     /**
