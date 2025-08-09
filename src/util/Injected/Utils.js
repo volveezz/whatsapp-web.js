@@ -598,7 +598,13 @@ exports.LoadUtils = () => {
         msg.links = window.Store.Validators.findLinks(
             message.mediaObject ? message.caption : message.body,
         ).map((link) => ({
-            link: link.href,
+            link: (() => {
+                try {
+                    return encodeURI(link.href);
+                } catch (e) {
+                    return link.href;
+                }
+            })(),
             isSuspicious: Boolean(
                 link.suspiciousCharacters && link.suspiciousCharacters.size,
             ),
