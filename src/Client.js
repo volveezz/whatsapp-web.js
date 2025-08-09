@@ -130,6 +130,7 @@ class Client extends EventEmitter {
         this.isInjecting = false;
         this._storeInjected = false;
         this._listenersAttached = false;
+        this._eventThrottlerCleanupInterval = null;
 
         Util.setFfmpegPath(this.options.ffmpegPath);
     }
@@ -137,7 +138,7 @@ class Client extends EventEmitter {
     async inject() {
         if (!this.pupPage || this.pupPage.isClosed() || this.lastLoggedOut) {
             console.log(
-                `[${this.clientId}] [DEBUG] Skipping inject - page closed or logged out`
+                `[${this.clientId}] [DEBUG] Skipping inject - page closed or logged out`,
             );
             return;
         }
@@ -173,7 +174,7 @@ class Client extends EventEmitter {
 
             await this.pupPage.waitForFunction(
                 "window.Debug?.VERSION != undefined",
-                { timeout: this.options.authTimeoutMs }
+                { timeout: this.options.authTimeoutMs },
             );
 
             const version = await this.getWWebVersion();
@@ -184,7 +185,7 @@ class Client extends EventEmitter {
             } else {
                 await this.pupPage.evaluate(
                     ExposeLegacyAuthStore,
-                    moduleRaid.toString()
+                    moduleRaid.toString(),
                 );
             }
 
@@ -208,11 +209,11 @@ class Client extends EventEmitter {
                                 ) {
                                     window.AuthStore.AppState.off(
                                         "change:state",
-                                        waitTillInit
+                                        waitTillInit,
                                     );
                                     r();
                                 }
-                            }
+                            },
                         );
                     });
                 }
@@ -232,7 +233,7 @@ class Client extends EventEmitter {
                      */
                     this.emit(
                         Events.AUTHENTICATION_FAILURE,
-                        failureEventPayload
+                        failureEventPayload,
                     );
                     await this.destroy();
                     if (restart) {
@@ -259,12 +260,12 @@ class Client extends EventEmitter {
                             if (qrRetries > client.options.qrMaxRetries) {
                                 client.emit(
                                     Events.DISCONNECTED,
-                                    "Max qrcode retries reached"
+                                    "Max qrcode retries reached",
                                 );
                                 await client.destroy();
                             }
                         }
-                    }
+                    },
                 );
 
                 await this.pupPage.evaluate(async () => {
@@ -273,11 +274,11 @@ class Client extends EventEmitter {
                     const noiseKeyPair =
                         await window.AuthStore.RegistrationUtils.waNoiseInfo.get();
                     const staticKeyB64 = window.AuthStore.Base64Tools.encodeB64(
-                        noiseKeyPair.staticKeyPair.pubKey
+                        noiseKeyPair.staticKeyPair.pubKey,
                     );
                     const identityKeyB64 =
                         window.AuthStore.Base64Tools.encodeB64(
-                            registrationInfo.identityKeyPair.pubKey
+                            registrationInfo.identityKeyPair.pubKey,
                         );
                     const advSecretKey =
                         await window.AuthStore.RegistrationUtils.getADVSecretKey();
@@ -309,7 +310,7 @@ class Client extends EventEmitter {
                         lastPercent = percent;
                         client.emit(Events.LOADING_SCREEN, percent);
                     }
-                }
+                },
             );
 
             // Expose onAuthAppStateChangedEvent before it's used
@@ -330,7 +331,7 @@ class Client extends EventEmitter {
                             }
                         });
                     }
-                }
+                },
             );
 
             // Expose onAppStateHasSyncedEvent before it's used
@@ -343,7 +344,7 @@ class Client extends EventEmitter {
 
                     client.emit(
                         Events.AUTHENTICATED,
-                        await client.authStrategy.getAuthEventPayload()
+                        await client.authStrategy.getAuthEventPayload(),
                     );
 
                     const injected = await client.pupPage.evaluate(async () => {
@@ -362,12 +363,12 @@ class Client extends EventEmitter {
                                 client.options.webVersionCache;
                             const webCache = WebCacheFactory.createWebCache(
                                 webCacheType,
-                                webCacheOptions
+                                webCacheOptions,
                             );
                             const version = await client.getWWebVersion();
                             await webCache.persist(
                                 client.currentIndexHtml,
-                                version
+                                version,
                             );
                         }
 
@@ -386,7 +387,7 @@ class Client extends EventEmitter {
 
                         // Check window.Store Injection
                         await client.pupPage.waitForFunction(
-                            "window.Store != undefined"
+                            "window.Store != undefined",
                         );
 
                         /**
@@ -400,7 +401,7 @@ class Client extends EventEmitter {
                                     ...window.Store.Conn.serialize(),
                                     wid: window.Store.User.getMeUser(),
                                 };
-                            })
+                            }),
                         );
 
                         client.interface = new InterfaceController(client);
@@ -413,14 +414,14 @@ class Client extends EventEmitter {
 
                     if (lastPercent !== 100) {
                         await new Promise((resolve) =>
-                            setTimeout(resolve, 3000)
+                            setTimeout(resolve, 3000),
                         );
                     }
 
                     // Don't emit ready if we've been logged out
                     if (client.lastLoggedOut) {
                         console.log(
-                            `[${client.clientId}] [DEBUG] Skipping ready emission in onAppStateHasSyncedEvent - client logged out`
+                            `[${client.clientId}] [DEBUG] Skipping ready emission in onAppStateHasSyncedEvent - client logged out`,
                         );
                         return;
                     }
@@ -431,7 +432,7 @@ class Client extends EventEmitter {
                      */
                     client.emit(Events.READY);
                     client.authStrategy.afterAuthReady();
-                }
+                },
             );
 
             await exposeFunctionIfAbsent(
@@ -442,58 +443,84 @@ class Client extends EventEmitter {
                     await client.pupPage
                         .waitForNavigation({ waitUntil: "load", timeout: 5000 })
                         .catch((_) => _);
-                }
+                },
             );
             await this.pupPage.evaluate(() => {
-                window.AuthStore.AppState.on(
-                    "change:state",
-                    (_AppState, state) => {
-                        if (
-                            typeof window.onAuthAppStateChangedEvent ===
-                            "function"
-                        ) {
-                            try {
-                                window.onAuthAppStateChangedEvent(state);
-                            } catch (error) {
-                                console.warn(
-                                    "Error calling onAuthAppStateChangedEvent:",
-                                    error
-                                );
-                            }
+                // Ensure we can remove old listeners before re-adding
+                window.__wwebjs_auth_listeners =
+                    window.__wwebjs_auth_listeners || {};
+
+                const prev = window.__wwebjs_auth_listeners;
+                try {
+                    if (prev.appStateChange)
+                        window.AuthStore.AppState.off(
+                            "change:state",
+                            prev.appStateChange,
+                        );
+                } catch (_) {}
+                try {
+                    if (prev.hasSynced)
+                        window.AuthStore.AppState.off(
+                            "change:hasSynced",
+                            prev.hasSynced,
+                        );
+                } catch (_) {}
+                try {
+                    if (prev.offlineProgress)
+                        window.AuthStore.Cmd.off(
+                            "offline_progress_update",
+                            prev.offlineProgress,
+                        );
+                } catch (_) {}
+                try {
+                    if (prev.logout)
+                        window.AuthStore.Cmd.off("logout", prev.logout);
+                } catch (_) {}
+
+                const appStateChange = (_AppState, state) => {
+                    if (
+                        typeof window.onAuthAppStateChangedEvent === "function"
+                    ) {
+                        try {
+                            window.onAuthAppStateChangedEvent(state);
+                        } catch (error) {
+                            console.warn(
+                                "Error calling onAuthAppStateChangedEvent:",
+                                error,
+                            );
                         }
                     }
-                );
-                window.AuthStore.AppState.on("change:hasSynced", () => {
+                };
+                const hasSynced = () => {
                     if (typeof window.onAppStateHasSyncedEvent === "function") {
                         try {
                             window.onAppStateHasSyncedEvent();
                         } catch (error) {
                             console.warn(
                                 "Error calling onAppStateHasSyncedEvent:",
-                                error
+                                error,
                             );
                         }
                     }
-                });
-                window.AuthStore.Cmd.on("offline_progress_update", () => {
+                };
+                const offlineProgress = () => {
                     if (
                         typeof window.onOfflineProgressUpdateEvent ===
                         "function"
                     ) {
                         try {
                             window.onOfflineProgressUpdateEvent(
-                                window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress()
+                                window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress(),
                             );
                         } catch (error) {
                             console.warn(
                                 "Error calling onOfflineProgressUpdateEvent:",
-                                error
+                                error,
                             );
                         }
                     }
-                });
-
-                window.AuthStore.Cmd.on("logout", async () => {
+                };
+                const logout = async () => {
                     if (typeof window.onLogoutEvent === "function") {
                         try {
                             await window.onLogoutEvent();
@@ -501,7 +528,23 @@ class Client extends EventEmitter {
                             console.warn("Error calling onLogoutEvent:", error);
                         }
                     }
-                });
+                };
+
+                // Store references and attach
+                window.__wwebjs_auth_listeners = {
+                    appStateChange,
+                    hasSynced,
+                    offlineProgress,
+                    logout,
+                };
+
+                window.AuthStore.AppState.on("change:state", appStateChange);
+                window.AuthStore.AppState.on("change:hasSynced", hasSynced);
+                window.AuthStore.Cmd.on(
+                    "offline_progress_update",
+                    offlineProgress,
+                );
+                window.AuthStore.Cmd.on("logout", logout);
             });
         } catch (err) {
             if (!hasReloaded) throw err;
@@ -581,7 +624,7 @@ class Client extends EventEmitter {
             isAlreadyInitialized = await page.evaluate(
                 () =>
                     typeof window.Store !== "undefined" &&
-                    typeof window.WWebJS !== "undefined"
+                    typeof window.WWebJS !== "undefined",
             );
         }
 
@@ -596,7 +639,7 @@ class Client extends EventEmitter {
             // Don't emit ready if we've been logged out
             if (this.lastLoggedOut) {
                 console.log(
-                    `[${this.clientId}] [DEBUG] Skipping ready emission - client logged out`
+                    `[${this.clientId}] [DEBUG] Skipping ready emission - client logged out`,
                 );
                 return;
             }
@@ -612,7 +655,7 @@ class Client extends EventEmitter {
 
             if (!isAuthenticated) {
                 console.log(
-                    `[${this.clientId}] [DEBUG] Store not ready or not authenticated, skipping ready emission`
+                    `[${this.clientId}] [DEBUG] Store not ready or not authenticated, skipping ready emission`,
                 );
                 return;
             }
@@ -638,7 +681,7 @@ class Client extends EventEmitter {
             } catch (err) {
                 console.warn(
                     `[${this.clientId}] [WWebJS] Failed to auto-disable auto-download flags:`,
-                    err?.message || err
+                    err?.message || err,
                 );
             }
         };
@@ -672,7 +715,7 @@ class Client extends EventEmitter {
             // Skip any operations if we've been logged out
             if (this.lastLoggedOut) {
                 console.log(
-                    `[${this.clientId}] [DEBUG] Skipping framenavigated - client logged out`
+                    `[${this.clientId}] [DEBUG] Skipping framenavigated - client logged out`,
                 );
                 return;
             }
@@ -688,27 +731,27 @@ class Client extends EventEmitter {
 
             if (!this.pupPage || this.pupPage.isClosed()) {
                 console.error(
-                    `[${this.clientId}] [DEBUG] Page is closed or undefined. Skipping.`
+                    `[${this.clientId}] [DEBUG] Page is closed or undefined. Skipping.`,
                 );
                 return;
             }
 
             if (!alreadyInjected && frame.url().startsWith(WhatsWebURL)) {
                 console.log(
-                    `[${this.clientId}] [DEBUG] Page loaded/navigated, attempting injection...`
+                    `[${this.clientId}] [DEBUG] Page loaded/navigated, attempting injection...`,
                 );
                 this._storeInjected = false;
                 this._listenersAttached = false;
                 await this.debouncedInject();
             } else if (alreadyInjected) {
                 console.log(
-                    `[${this.clientId}] [DEBUG] Page loaded/navigated, WWebJS already injected, skipping inject().`
+                    `[${this.clientId}] [DEBUG] Page loaded/navigated, WWebJS already injected, skipping inject().`,
                 );
             } else {
                 console.log(
                     `[${
                         this.clientId
-                    }] [DEBUG] Page navigated, but not injecting. URL: ${frame.url()}, Injected: ${alreadyInjected}`
+                    }] [DEBUG] Page navigated, but not injecting. URL: ${frame.url()}, Injected: ${alreadyInjected}`,
                 );
             }
         });
@@ -724,16 +767,16 @@ class Client extends EventEmitter {
         return await this.pupPage.evaluate(
             async (phoneNumber, showNotification) => {
                 window.AuthStore.PairingCodeLinkUtils.setPairingType(
-                    "ALT_DEVICE_LINKING"
+                    "ALT_DEVICE_LINKING",
                 );
                 await window.AuthStore.PairingCodeLinkUtils.initializeAltDeviceLinking();
                 return window.AuthStore.PairingCodeLinkUtils.startAltLinkingFlow(
                     phoneNumber,
-                    showNotification
+                    showNotification,
                 );
             },
             phoneNumber,
-            showNotification
+            showNotification,
         );
     }
 
@@ -752,7 +795,7 @@ class Client extends EventEmitter {
             "!!window.Store && !!window.Store.Msg",
             {
                 timeout: 0,
-            }
+            },
         );
 
         await this.pupPage.evaluate(() => {
@@ -768,7 +811,7 @@ class Client extends EventEmitter {
                 // Remove listeners stored from previous runs
                 if (window.__wwebjs_listeners[storeName]) {
                     for (const [evt, handler] of Object.entries(
-                        window.__wwebjs_listeners[storeName]
+                        window.__wwebjs_listeners[storeName],
                     )) {
                         try {
                             emitter.off(evt, handler);
@@ -777,7 +820,7 @@ class Client extends EventEmitter {
                                 `[${
                                     window.wwebjs_client_id || "default"
                                 }] WWebJS: Failed to remove listener for ${storeName}.${evt}`,
-                                e
+                                e,
                             );
                         }
                     }
@@ -797,7 +840,7 @@ class Client extends EventEmitter {
                                 console.error(
                                     `[${
                                         window.wwebjs_client_id || "default"
-                                    }] WWebJS Cleanup: ${k} STILL EXISTS after delete attempt`
+                                    }] WWebJS Cleanup: ${k} STILL EXISTS after delete attempt`,
                                 );
                             }
                         } catch (e) {
@@ -805,7 +848,7 @@ class Client extends EventEmitter {
                                 `[${
                                     window.wwebjs_client_id || "default"
                                 }] WWebJS Cleanup: FAILED to clear ${k}:`,
-                                e.message
+                                e.message,
                             );
                         }
                     }
@@ -837,7 +880,7 @@ class Client extends EventEmitter {
                     if (eventThrottler.errorCount[eventType] > 0) {
                         eventThrottler.errorCount[eventType] = Math.max(
                             0,
-                            eventThrottler.errorCount[eventType] - 10
+                            eventThrottler.errorCount[eventType] - 10,
                         );
                     }
                 }
@@ -855,7 +898,7 @@ class Client extends EventEmitter {
                             if (now % 10000 < 100) {
                                 // Log every ~10 seconds
                                 console.warn(
-                                    `[${client.clientId}] Event ${eventType} disabled due to excessive errors`
+                                    `[${client.clientId}] Event ${eventType} disabled due to excessive errors`,
                                 );
                             }
                             return;
@@ -873,15 +916,25 @@ class Client extends EventEmitter {
                             (eventThrottler.errorCount[eventType] || 0) + 1;
                         console.error(
                             `[${client.clientId}] Error in event ${eventType}:`,
-                            error
+                            error,
                         );
                     }
                 };
             },
         };
 
-        // Setup periodic cleanup
-        setInterval(eventThrottler.cleanup, 300000); // Every 5 minutes
+        // Setup periodic cleanup (ensure only one interval lives at a time)
+        if (this._eventThrottlerCleanupInterval) {
+            clearInterval(this._eventThrottlerCleanupInterval);
+            this._eventThrottlerCleanupInterval = null;
+        }
+        this._eventThrottlerCleanupInterval = setInterval(() => {
+            try {
+                eventThrottler.cleanup();
+            } catch (_) {
+                // no-op
+            }
+        }, 300000);
 
         await exposeFunctionIfAbsent(
             this.pupPage,
@@ -893,11 +946,11 @@ class Client extends EventEmitter {
                         if (msg.type === "gp2") {
                             const notification = new GroupNotification(
                                 client,
-                                msg
+                                msg,
                             );
                             if (
                                 ["add", "invite", "linked_group_join"].includes(
-                                    msg.subtype
+                                    msg.subtype,
                                 )
                             ) {
                                 /**
@@ -927,7 +980,7 @@ class Client extends EventEmitter {
                                  */
                                 client.emit(
                                     Events.GROUP_ADMIN_CHANGED,
-                                    notification
+                                    notification,
                                 );
                             } else if (
                                 msg.subtype === "membership_approval_request"
@@ -943,7 +996,7 @@ class Client extends EventEmitter {
                                  */
                                 client.emit(
                                     Events.GROUP_MEMBERSHIP_REQUEST,
-                                    notification
+                                    notification,
                                 );
                             } else {
                                 /**
@@ -974,9 +1027,9 @@ class Client extends EventEmitter {
                          */
                         client.emit(Events.MESSAGE_RECEIVED, message);
                     },
-                    25
-                )
-            )
+                    25,
+                ),
+            ),
         );
 
         let last_message;
@@ -1002,10 +1055,10 @@ class Client extends EventEmitter {
                     client.emit(
                         Events.MESSAGE_REVOKED_EVERYONE,
                         message,
-                        revoked_msg
+                        revoked_msg,
                     );
                 }
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1054,10 +1107,10 @@ class Client extends EventEmitter {
                         message,
                         oldId,
                         newId,
-                        isContact
+                        isContact,
                     );
                 }
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1074,7 +1127,7 @@ class Client extends EventEmitter {
                  * @param {Message} message The message that was revoked
                  */
                 client.emit(Events.MESSAGE_REVOKED_ME, message);
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1090,7 +1143,7 @@ class Client extends EventEmitter {
                  * @param {MessageAck} ack The new ACK value
                  */
                 client.emit(Events.MESSAGE_ACK, message, ack);
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1103,7 +1156,7 @@ class Client extends EventEmitter {
                  * Emitted when the chat unread count changes
                  */
                 client.emit(Events.UNREAD_COUNT, chat);
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1118,7 +1171,7 @@ class Client extends EventEmitter {
                  * @param {Message} message The message with media that was uploaded
                  */
                 client.emit(Events.MEDIA_UPLOADED, message);
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1145,7 +1198,7 @@ class Client extends EventEmitter {
                     if (state === WAState.CONFLICT) {
                         setTimeout(() => {
                             client.pupPage.evaluate(() =>
-                                window.Store.AppState.takeover()
+                                window.Store.AppState.takeover(),
                             );
                         }, client.options.takeoverTimeoutMs);
                     }
@@ -1161,7 +1214,7 @@ class Client extends EventEmitter {
                     client.emit(Events.DISCONNECTED, state);
                     client.destroy();
                 }
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1181,7 +1234,7 @@ class Client extends EventEmitter {
                  * @deprecated
                  */
                 client.emit(Events.BATTERY_CHANGED, { battery, plugged });
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(this.pupPage, "onIncomingCall", (call) => {
@@ -1224,10 +1277,10 @@ class Client extends EventEmitter {
 
                     client.emit(
                         Events.MESSAGE_REACTION,
-                        new Reaction(client, reaction)
+                        new Reaction(client, reaction),
                     );
                 }
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1242,7 +1295,7 @@ class Client extends EventEmitter {
                  * @param {Chat} chat
                  */
                 client.emit(Events.CHAT_REMOVED, _chat);
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1259,7 +1312,7 @@ class Client extends EventEmitter {
                  * @param {boolean} prevState
                  */
                 client.emit(Events.CHAT_ARCHIVED, _chat, currState, prevState);
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1280,9 +1333,9 @@ class Client extends EventEmitter {
                     Events.MESSAGE_EDIT,
                     new Message(client, msg),
                     newBody,
-                    prevBody
+                    prevBody,
                 );
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1296,9 +1349,9 @@ class Client extends EventEmitter {
                  */
                 client.emit(
                     Events.MESSAGE_CIPHERTEXT,
-                    new Message(client, msg)
+                    new Message(client, msg),
                 );
-            })
+            }),
         );
 
         await exposeFunctionIfAbsent(
@@ -1312,7 +1365,7 @@ class Client extends EventEmitter {
                  * @event Client#vote_update
                  */
                 this.emit(Events.VOTE_UPDATE, _vote);
-            })
+            }),
         );
 
         await this.pupPage.evaluate(() => {
@@ -1329,25 +1382,25 @@ class Client extends EventEmitter {
             });
             attachListener("Msg", "change:type", (msg) => {
                 window.onChangeMessageTypeEvent(
-                    window.WWebJS.getMessageModel(msg)
+                    window.WWebJS.getMessageModel(msg),
                 );
             });
             attachListener("Msg", "change:ack", (msg, ack) => {
                 window.onMessageAckEvent(
                     window.WWebJS.getMessageModel(msg),
-                    ack
+                    ack,
                 );
             });
             attachListener("Msg", "change:isUnsentMedia", (msg, unsent) => {
                 if (msg.id.fromMe && !unsent)
                     window.onMessageMediaUploadedEvent(
-                        window.WWebJS.getMessageModel(msg)
+                        window.WWebJS.getMessageModel(msg),
                     );
             });
             attachListener("Msg", "remove", (msg) => {
                 if (msg.isNewMsg)
                     window.onRemoveMessageEvent(
-                        window.WWebJS.getMessageModel(msg)
+                        window.WWebJS.getMessageModel(msg),
                     );
             });
             attachListener(
@@ -1357,9 +1410,9 @@ class Client extends EventEmitter {
                     window.onEditMessageEvent(
                         window.WWebJS.getMessageModel(msg),
                         newBody,
-                        prevBody
+                        prevBody,
                     );
-                }
+                },
             );
             attachListener("AppState", "change:state", (_AppState, state) => {
                 window.onAppStateChangedEvent(state);
@@ -1369,7 +1422,7 @@ class Client extends EventEmitter {
             });
             attachListener("Chat", "remove", async (chat) => {
                 window.onRemoveChatEvent(
-                    await window.WWebJS.getChatModel(chat)
+                    await window.WWebJS.getChatModel(chat),
                 );
             });
             attachListener(
@@ -1379,9 +1432,9 @@ class Client extends EventEmitter {
                     window.onArchiveChatEvent(
                         await window.WWebJS.getChatModel(chat),
                         currState,
-                        prevState
+                        prevState,
                     );
-                }
+                },
             );
             attachListener("Msg", "add", (msg) => {
                 if (msg.isNewMsg) {
@@ -1389,15 +1442,15 @@ class Client extends EventEmitter {
                         // defer message event until ciphertext is resolved (type changed)
                         msg.once("change:type", (_msg) =>
                             window.onAddMessageEvent(
-                                window.WWebJS.getMessageModel(_msg)
-                            )
+                                window.WWebJS.getMessageModel(_msg),
+                            ),
                         );
                         window.onAddMessageCiphertextEvent(
-                            window.WWebJS.getMessageModel(msg)
+                            window.WWebJS.getMessageModel(msg),
                         );
                     } else {
                         window.onAddMessageEvent(
-                            window.WWebJS.getMessageModel(msg)
+                            window.WWebJS.getMessageModel(msg),
                         );
                     }
                 }
@@ -1406,9 +1459,8 @@ class Client extends EventEmitter {
                 window.onChatUnreadCountEvent(chat);
             });
             attachListener("PollVote", "add", async (vote) => {
-                const pollVoteModel = await window.WWebJS.getPollVoteModel(
-                    vote
-                );
+                const pollVoteModel =
+                    await window.WWebJS.getPollVoteModel(vote);
                 pollVoteModel && window.onPollVoteEvent(pollVoteModel);
             });
 
@@ -1431,7 +1483,7 @@ class Client extends EventEmitter {
                                 senderUserJid,
                                 timestamp,
                             };
-                        })
+                        }),
                     );
                     return ogMethod.apply(module, args);
                 }).bind(module);
@@ -1445,7 +1497,7 @@ class Client extends EventEmitter {
             this.options.webVersionCache;
         const webCache = WebCacheFactory.createWebCache(
             webCacheType,
-            webCacheOptions
+            webCacheOptions,
         );
 
         const requestedVersion = this.options.webVersion;
@@ -1481,11 +1533,24 @@ class Client extends EventEmitter {
         if (this._authStoreCheckInterval) {
             clearInterval(this._authStoreCheckInterval);
         }
+        if (this._eventThrottlerCleanupInterval) {
+            clearInterval(this._eventThrottlerCleanupInterval);
+            this._eventThrottlerCleanupInterval = null;
+        }
+        try {
+            await this.cdpSession?.detach();
+        } catch (_) {}
+        this.cdpSession = null;
+        try {
+            this.pupPage?.removeAllListeners?.();
+        } catch (_) {}
         const browserPid = this.pupBrowser?.process()?.pid;
         await this.pupBrowser?.close();
         await this.authStrategy?.destroy();
 
         if (browserPid) treeKill(browserPid);
+        this.pupPage = null;
+        this.pupBrowser = null;
     }
 
     /**
@@ -1506,8 +1571,8 @@ class Client extends EventEmitter {
             .catch((e) =>
                 console.error(
                     `[${this.clientId}] Received an error when tried to logout from the session`,
-                    e
-                )
+                    e,
+                ),
             );
         await this.pupBrowser?.close();
 
@@ -1619,7 +1684,7 @@ class Client extends EventEmitter {
             content = "";
         } else if (Array.isArray(content) && content[0] instanceof Contact) {
             internalOptions.contactCardList = content.map(
-                (c) => c.id._serialized
+                (c) => c.id._serialized,
             );
             content = "";
         } else if (content instanceof Buttons) {
@@ -1644,7 +1709,7 @@ class Client extends EventEmitter {
                     author: options.stickerAuthor,
                     categories: options.stickerCategories,
                 },
-                this.pupPage
+                this.pupPage,
             );
         }
 
@@ -1681,14 +1746,14 @@ class Client extends EventEmitter {
             chatId,
             content,
             internalOptions,
-            sendSeen
+            sendSeen,
         );
 
         if (error) {
             console.error(
                 `[${this.clientId}] Failed to send message to`,
                 chatId,
-                error
+                error,
             );
             throw new SendMessageError({ ...error, clientId: this.clientId });
         }
@@ -1749,14 +1814,14 @@ class Client extends EventEmitter {
                             finished = true;
                             document.getElementById(id)?.remove();
                             throw new Error(
-                                "Media upload timed out after 120s"
+                                "Media upload timed out after 120s",
                             );
                         }
                     }, 120000);
 
                     const data = await window.WWebJS.processMediaData(
                         file,
-                        options
+                        options,
                     );
                     if (!window.WWebJS.preparedMediaMap)
                         window.WWebJS.preparedMediaMap = {};
@@ -1769,7 +1834,7 @@ class Client extends EventEmitter {
                 }
             },
             inputId,
-            options
+            options,
         );
 
         // Race the promises: if abort wins, cleanup input in Node. If not, continue.
@@ -1810,7 +1875,7 @@ class Client extends EventEmitter {
                 }
             },
             messageId,
-            reaction
+            reaction,
         );
     }
 
@@ -1830,16 +1895,16 @@ class Client extends EventEmitter {
                     query,
                     page,
                     count,
-                    remote
+                    remote,
                 );
                 return messages.map((msg) =>
-                    window.WWebJS.getMessageModel(msg)
+                    window.WWebJS.getMessageModel(msg),
                 );
             },
             query,
             options.page,
             options.limit,
-            options.chatId
+            options.chatId,
         );
 
         return messages.map((msg) => new Message(this, msg));
@@ -1936,7 +2001,7 @@ class Client extends EventEmitter {
     async acceptInvite(inviteCode) {
         const res = await this.pupPage.evaluate(async (inviteCode) => {
             return await window.Store.GroupInvite.joinGroupViaInvite(
-                inviteCode
+                inviteCode,
             );
         }, inviteCode);
 
@@ -1959,7 +2024,7 @@ class Client extends EventEmitter {
                 inviteCode,
                 String(inviteCodeExp),
                 groupId,
-                userWid
+                userWid,
             );
         }, inviteInfo);
     }
@@ -2094,7 +2159,7 @@ class Client extends EventEmitter {
                 await chat.mute.mute({ expiration: timestamp, sendDevice: !0 });
             },
             chatId,
-            unmuteDate || -1
+            unmuteDate || -1,
         );
     }
 
@@ -2128,7 +2193,7 @@ class Client extends EventEmitter {
     async getProfilePicUrl(contactId) {
         if (!this.pupPage || this.pupPage.isClosed()) {
             console.warn(
-                `[${this.clientId}] [getProfilePicUrl] Page is closed or undefined. Skipping.`
+                `[${this.clientId}] [getProfilePicUrl] Page is closed or undefined. Skipping.`,
             );
             return undefined;
         }
@@ -2136,14 +2201,14 @@ class Client extends EventEmitter {
         // Wait for WidFactory to be available
         await this.pupPage.waitForFunction(
             "window.Store && window.Store.WidFactory",
-            { timeout: 10000 }
+            { timeout: 10000 },
         );
 
         const profilePic = await this.pupPage.evaluate(async (contactId) => {
             try {
                 const chatWid = window.Store.WidFactory.createWid(contactId);
                 return await window.Store.ProfilePic.requestProfilePicFromServer(
-                    chatWid
+                    chatWid,
                 );
             } catch (err) {
                 if (err.name === "ServerStatusCodeError") return undefined;
@@ -2166,7 +2231,7 @@ class Client extends EventEmitter {
                 const wid = window.Store.WidFactory.createUserWid(contactId);
                 const chatConstructor =
                     window.Store.Contact.getModelsArray().find(
-                        (c) => !c.isGroup
+                        (c) => !c.isGroup,
                     ).constructor;
                 contact = new chatConstructor({ id: wid });
             }
@@ -2219,7 +2284,7 @@ class Client extends EventEmitter {
                 if (!result || result.wid === undefined) return null;
                 return result.wid;
             },
-            number.endsWith("@c.us") ? number : `${number}@c.us`
+            number.endsWith("@c.us") ? number : `${number}@c.us`,
         );
     }
 
@@ -2353,7 +2418,7 @@ class Client extends EventEmitter {
                                 thumb: undefined,
                                 title: title,
                             },
-                            participantWids
+                            participantWids,
                         );
                 } catch (err) {
                     return "CreateGroupError: An unknown error occupied while creating a group";
@@ -2377,13 +2442,13 @@ class Client extends EventEmitter {
                                 participant.invite_code_exp,
                                 comment,
                                 await window.WWebJS.getProfilePicThumbToBase64(
-                                    createGroupResult.wid
-                                )
+                                    createGroupResult.wid,
+                                ),
                             );
                         isInviteV4Sent = window.compareWwebVersions(
                             window.Debug.VERSION,
                             "<",
-                            "2.2335.6"
+                            "2.2335.6",
                         )
                             ? addParticipantResult === "OK"
                             : addParticipantResult.messageSendResult === "OK";
@@ -2416,7 +2481,7 @@ class Client extends EventEmitter {
             },
             title,
             participants,
-            options
+            options,
         );
     }
 
@@ -2496,15 +2561,15 @@ class Client extends EventEmitter {
     async getBlockedContacts() {
         const blockedContacts = await this.pupPage.evaluate(() => {
             let chatIds = window.Store.Blocklist.getModelsArray().map(
-                (a) => a.id._serialized
+                (a) => a.id._serialized,
             );
             return Promise.all(
-                chatIds.map((id) => window.WWebJS.getContact(id))
+                chatIds.map((id) => window.WWebJS.getContact(id)),
             );
         });
 
         return blockedContacts.map((contact) =>
-            ContactFactory.create(this.client, contact)
+            ContactFactory.create(this.client, contact),
         );
     }
 
@@ -2519,7 +2584,7 @@ class Client extends EventEmitter {
                 return window.WWebJS.setPicture(chatid, media);
             },
             this.info.wid._serialized,
-            media
+            media,
         );
 
         return success;
@@ -2552,10 +2617,10 @@ class Client extends EventEmitter {
                     throw "[LT01] Only Whatsapp business";
                 }
                 const labels = window.WWebJS.getLabels().filter(
-                    (e) => labelIds.find((l) => l == e.id) !== undefined
+                    (e) => labelIds.find((l) => l == e.id) !== undefined,
                 );
                 const chats = window.Store.Chat.filter((e) =>
-                    chatIds.includes(e.id._serialized)
+                    chatIds.includes(e.id._serialized),
                 );
 
                 let actions = labels.map((label) => ({
@@ -2573,11 +2638,11 @@ class Client extends EventEmitter {
 
                 return await window.Store.Label.addOrRemoveLabels(
                     actions,
-                    chats
+                    chats,
                 );
             },
             labelIds,
-            chatIds
+            chatIds,
         );
     }
 
@@ -2600,7 +2665,7 @@ class Client extends EventEmitter {
         return await this.pupPage.evaluate(async (groupId) => {
             const groupWid = window.Store.WidFactory.createWid(groupId);
             return await window.Store.MembershipRequestUtils.getMembershipApprovalRequests(
-                groupWid
+                groupWid,
             );
         }, groupId);
     }
@@ -2634,11 +2699,11 @@ class Client extends EventEmitter {
                     groupId,
                     "Approve",
                     requesterIds,
-                    sleep
+                    sleep,
                 );
             },
             groupId,
-            options
+            options,
         );
     }
 
@@ -2656,11 +2721,11 @@ class Client extends EventEmitter {
                     groupId,
                     "Reject",
                     requesterIds,
-                    sleep
+                    sleep,
                 );
             },
             groupId,
-            options
+            options,
         );
     }
 
@@ -2680,7 +2745,7 @@ class Client extends EventEmitter {
                     window.wwebjs_client_id || "default"
                 }] Updating auto download audio`,
                 autoDownload,
-                flag
+                flag,
             );
 
             await window.Store.Settings.setAutoDownloadAudio(flag);
@@ -2705,7 +2770,7 @@ class Client extends EventEmitter {
                     window.wwebjs_client_id || "default"
                 }] Updating auto download documents`,
                 autoDownload,
-                flag
+                flag,
             );
 
             await window.Store.Settings.setAutoDownloadDocuments(flag);
@@ -2729,7 +2794,7 @@ class Client extends EventEmitter {
                     window.wwebjs_client_id || "default"
                 }] Updating auto download photos`,
                 autoDownload,
-                flag
+                flag,
             );
 
             await window.Store.Settings.setAutoDownloadPhotos(flag);
@@ -2753,7 +2818,7 @@ class Client extends EventEmitter {
                     window.wwebjs_client_id || "default"
                 }] Updating auto download videos`,
                 autoDownload,
-                flag
+                flag,
             );
 
             await window.Store.Settings.setAutoDownloadVideos(flag);
@@ -2821,14 +2886,14 @@ class Client extends EventEmitter {
                     console.log(
                         `[${
                             window.wwebjs_client_id || "default"
-                        }] Crypto store reinitialized`
+                        }] Crypto store reinitialized`,
                     );
                 } catch (error) {
                     console.warn(
                         `[${
                             window.wwebjs_client_id || "default"
                         }] Failed to reinitialize crypto store:`,
-                        error
+                        error,
                     );
                 }
             }
@@ -2836,7 +2901,7 @@ class Client extends EventEmitter {
             // Force decrypt any pending ciphertext messages
             if (window.Store?.Msg) {
                 const ciphertextMessages = window.Store.Msg.filter(
-                    (msg) => msg.type === "ciphertext"
+                    (msg) => msg.type === "ciphertext",
                 );
                 ciphertextMessages.forEach((msg) => {
                     if (window.Store?.CryptoLib?.decryptE2EMessage) {
@@ -2846,9 +2911,9 @@ class Client extends EventEmitter {
                                     `[${
                                         window.wwebjs_client_id || "default"
                                     }] Failed to decrypt message:`,
-                                    err
+                                    err,
                                 );
-                            }
+                            },
                         );
                     }
                 });
