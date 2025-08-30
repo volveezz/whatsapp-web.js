@@ -675,7 +675,10 @@ class Client extends EventEmitter {
 
             const infoData = await page.evaluate(() => ({
                 ...window.Store.Conn.serialize(),
-                wid: window.Store.User.getMeUser(),
+                wid:
+                    typeof window.Store.User.getMaybeMeUser === "function"
+                        ? window.Store.User.getMaybeMeUser()
+                        : window.Store.User.getMeUser(),
             }));
             this.info = new ClientInfo(this, infoData);
             this.interface = new InterfaceController(this);
