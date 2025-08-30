@@ -399,7 +399,11 @@ class Client extends EventEmitter {
                             await client.pupPage.evaluate(() => {
                                 return {
                                     ...window.Store.Conn.serialize(),
-                                    wid: window.Store.User.getMeUser(),
+                                    wid:
+                                        typeof window.Store.User
+                                            .getMaybeMeUser === "function"
+                                            ? window.Store.User.getMaybeMeUser()
+                                            : window.Store.User.getMeUser(),
                                 };
                             }),
                         );
@@ -662,7 +666,8 @@ class Client extends EventEmitter {
                     window.Store &&
                     window.Store.User &&
                     window.Store.Conn &&
-                    typeof window.Store.User.getMeUser === "function"
+                    (typeof window.Store.User.getMaybeMeUser === "function" ||
+                        typeof window.Store.User.getMeUser === "function")
                 );
             });
 
