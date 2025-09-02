@@ -400,8 +400,11 @@ class Client extends EventEmitter {
                                 return {
                                     ...window.Store.Conn.serialize(),
                                     wid:
-                                        window.Store.User.getMaybeMeUser() ||
-                                        window.Store.User.getMaybeMeLidUser(),
+                                        typeof window.Store.User
+                                            .getMaybeMePnUser === "function"
+                                            ? window.Store.User.getMaybeMePnUser()
+                                            : window.Store.User.getMaybeMeLidUser?.() ||
+                                              window.Store.User.getMaybeMeUser?.(),
                                 };
                             }),
                         );
