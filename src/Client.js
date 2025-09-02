@@ -400,10 +400,8 @@ class Client extends EventEmitter {
                                 return {
                                     ...window.Store.Conn.serialize(),
                                     wid:
-                                        typeof window.Store.User
-                                            .getMaybeMeUser === "function"
-                                            ? window.Store.User.getMaybeMeUser()
-                                            : window.Store.User.getMeUser(),
+                                        window.Store.User.getMaybeMeUser() ||
+                                        window.Store.User.getMaybeMeLidUser(),
                                 };
                             }),
                         );
@@ -667,7 +665,8 @@ class Client extends EventEmitter {
                     window.Store.User &&
                     window.Store.Conn &&
                     (typeof window.Store.User.getMaybeMeUser === "function" ||
-                        typeof window.Store.User.getMeUser === "function")
+                        typeof window.Store.User.getMaybeMeLidUser ===
+                            "function")
                 );
             });
 
@@ -681,9 +680,8 @@ class Client extends EventEmitter {
             const infoData = await page.evaluate(() => ({
                 ...window.Store.Conn.serialize(),
                 wid:
-                    typeof window.Store.User.getMaybeMeUser === "function"
-                        ? window.Store.User.getMaybeMeUser()
-                        : window.Store.User.getMeUser(),
+                    window.Store.User.getMaybeMeUser() ||
+                    window.Store.User.getMaybeMeLidUser(),
             }));
             this.info = new ClientInfo(this, infoData);
             this.interface = new InterfaceController(this);
