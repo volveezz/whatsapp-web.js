@@ -682,7 +682,8 @@ class Client extends EventEmitter {
                 ...window.Store.Conn.serialize(),
                 wid:
                     typeof window.Store.User.getMaybeMeUser === "function"
-                        ? window.Store.User.getMaybeMeUser()
+                        ? window.Store.User.getMaybeMeUser() ||
+                          window.Store.User.getMaybeMeLidUser()
                         : window.Store.User.getMeUser(),
             }));
             this.info = new ClientInfo(this, infoData);
